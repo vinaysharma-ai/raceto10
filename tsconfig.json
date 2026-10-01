@@ -6,6 +6,10 @@
     "skipLibCheck": true,
     "strict": true,
     "noEmit": true,
+    // Test files are executed directly by Node's built-in test runner, which
+    // requires explicit file extensions on relative imports. This lets the same
+    // files satisfy both Node and the type checker.
+    "allowImportingTsExtensions": true,
     "esModuleInterop": true,
     "module": "esnext",
     "moduleResolution": "bundler",

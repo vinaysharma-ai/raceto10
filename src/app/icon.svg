@@ -1,0 +1,9 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 36 36" width="36" height="36" role="img" aria-label="raceto10">
+  <!-- Static asset: colours are the literal token values, since this file is
+       served standalone and cannot read the CSS custom properties. -->
+  <rect width="36" height="36" fill="#0B0B0D"/>
+  <g transform="translate(0 4)" fill="none" stroke-width="3" stroke-linecap="round" stroke-linejoin="round">
+    <path d="M4.5 11 L9.5 6 L9.5 22" stroke="#F2F1ED"/>
+    <path d="M24 6 A8 8 0 1 1 16.12 12.61" stroke="#FF7A1A"/>
+  </g>
+</svg>

@@ -1,0 +1,95 @@
+# Reconciliation poll.
+#
+# `00` §63: "Vercel Hobby cron is daily at best. Use Supabase `pg_cron` +
+# `pg_net` … or a GitHub Actions schedule calling a secret-protected route."
+#
+# This is that second option. `pg_cron` and `pg_net` are both *available* on the
+# project but not installed, so enabling them needs a migration — and a
+# migration needs approval. This workflow needs neither, so the stage is
+# complete now rather than blocked. `supabase/migrations/20260930120000_*`
+# carries the preferred path, prepared and unpushed, for whenever that is
+# approved.
+#
+# ## What it does, and what it deliberately does not
+#
+# It calls one endpoint with one secret and checks the status code. It does not
+# know which racers exist, how many there are, or what any of them have earned —
+# all of that is server-side, behind the route's own authentication. A workflow
+# that could name a racer would be a second, weaker way into the same data.
+#
+# ## Why `CRON_SECRET` is a GitHub secret and not an environment here
+#
+# The value is never written into this file, never printed, and never passed as
+# a command-line argument. It is read from the repository's secret store at run
+# time and sent in an Authorization header. `set -x` is off, and curl is given
+# `-s` so a failure cannot echo the header back into the job log.
+#
+# ## The two limits worth knowing
+#
+#   * GitHub's scheduler is best-effort. Under load a run can be delayed by
+#     several minutes, and it is not a queue — a delayed run is not retried and
+#     does not stack. For a 30-minute poll that is fine; the overlap window in
+#     `reconcile.ts` exists precisely so a late or skipped run cannot cause a
+#     missed payment to be counted twice, or a gap to swallow one.
+#   * Scheduled workflows are disabled after 60 days without repository
+#     activity. A quiet repo stops polling, which is worth remembering before
+#     relying on this during a long quiet stretch.
+
+name: Reconcile
+
+on:
+  schedule:
+    # Every 30 minutes. GitHub's floor is 5 minutes; this is well inside it.
+    - cron: "*/30 * * * *"
+  # Manual trigger, so a failed or missed run can be replayed without waiting
+  # for the next slot. Safe to run repeatedly — reconciliation is idempotent.
+  workflow_dispatch:
+
+# A second run starting while one is in flight would be harmless (the writes are
+# compare-and-set and payment rows are unique per customer), but there is no
+# reason to spend the provider calls.
+concurrency:
+  group: reconcile
+  cancel-in-progress: false
+
+jobs:
+  reconcile:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Call the reconcile endpoint
+        env:
+          APP_URL: ${{ vars.APP_URL }}
+          CRON_SECRET: ${{ secrets.CRON_SECRET }}
+        run: |
+          set -euo pipefail
+
+          if [ -z "${APP_URL:-}" ]; then
+            echo "::error::Repository variable APP_URL is not set (e.g. https://raceto10.lol)."
+            exit 1
+          fi
+          if [ -z "${CRON_SECRET:-}" ]; then
+            echo "::error::Repository secret CRON_SECRET is not set. Generate one with 'openssl rand -hex 32' and add the same value to the deployment environment."
+            exit 1
+          fi
+
+          # --fail-with-body so a 4xx/5xx fails the step rather than passing
+          # quietly, and the body is still surfaced for diagnosis. The body is
+          # counts only — the route never returns a credential or a provider
+          # response.
+          status=$(curl --silent --show-error --fail-with-body \
+            --max-time 300 \
+            --request GET \
+            --header "Authorization: Bearer ${CRON_SECRET}" \
+            --output /tmp/reconcile.json \
+            --write-out '%{http_code}' \
+            "${APP_URL}/api/cron/reconcile") || {
+              code=$?
+              echo "::error::Reconcile request failed (curl exit ${code})."
+              # The response body only, never the request headers.
+              cat /tmp/reconcile.json 2>/dev/null || true
+              exit 1
+            }
+
+          echo "HTTP ${status}"
+          cat /tmp/reconcile.json
