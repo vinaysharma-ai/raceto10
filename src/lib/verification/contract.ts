@@ -322,7 +322,7 @@ export async function runAdapterContract(
     results.push({
       name: "verifyWebhook positive case",
       ok: true,
-      detail: "skipped — this provider cannot receive webhooks",
+      detail: "skipped: this provider cannot receive webhooks",
     });
   }
 

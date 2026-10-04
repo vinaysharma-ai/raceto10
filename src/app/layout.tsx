@@ -25,7 +25,7 @@ export const metadata: Metadata = {
   // every boot, rather than only when some later route happens to import it.
   metadataBase: new URL(env.NEXT_PUBLIC_APP_URL),
   title: "raceto10",
-  description: "raceto10 — connect Stripe, race to your first 10 customers.",
+  description: "raceto10: connect Stripe, race to your first 10 customers.",
 };
 
 export const viewport: Viewport = {

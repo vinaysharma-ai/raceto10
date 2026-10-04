@@ -1,5 +1,6 @@
 import { Suspense } from "react";
 
+import { SearchBox } from "@/components/landing/search-box";
 import { ButtonLink } from "@/components/ui/button";
 import { getRaceBoard } from "@/lib/queries/race-board";
 import { racersOnTheBoard } from "@/lib/race/board";
@@ -12,8 +13,10 @@ import { racersOnTheBoard } from "@/lib/race/board";
  * correction pass was explicit that the copy must not imply a choice the
  * product does not offer yet.
  *
- * One CTA, and no form fields: the button goes to `/join`, it does not scroll
- * to an input.
+ * The search sits directly under the subline with the one call to action beside
+ * it, because they answer the two questions a first-time visitor has in order:
+ * "is anyone doing this?" and "how do I do it?". It stacks on phones, where
+ * sharing a row would leave the input too narrow to read its own placeholder.
  */
 
 /**
@@ -33,7 +36,7 @@ async function LiveCount() {
 
   if (!result.ok) {
     if (process.env.NODE_ENV !== "production") {
-      console.warn(`[live-count] no number rendered — ${result.reason}`);
+      console.warn(`[live-count] no number rendered: ${result.reason}`);
     }
     return null;
   }
@@ -60,15 +63,18 @@ export function Hero() {
       </Suspense>
 
       <h1 className="mt-6 text-large text-text">
-        You said you&apos;d get customers. Now prove it — in public, for free.
+        You said you&apos;d get customers. Now prove it, in public, for free.
       </h1>
 
       <p className="mt-5 max-w-2xl text-small text-text-muted">
-        raceto10 — connect Stripe, race to your first 10 customers.
+        raceto10: connect Stripe, race to your first 10 customers.
       </p>
 
-      <div className="mt-7">
-        <ButtonLink href="/join">Join the race</ButtonLink>
+      <div className="mt-7 flex flex-col gap-3 sm:flex-row sm:items-center">
+        <SearchBox className="w-full sm:min-w-[320px] sm:flex-1" />
+        <ButtonLink href="/join" className="w-full shrink-0 sm:w-auto">
+          Join the race
+        </ButtonLink>
       </div>
     </section>
   );

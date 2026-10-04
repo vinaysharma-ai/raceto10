@@ -128,7 +128,7 @@ function stripToMonochrome(map: StripMap) {
   // a way that is easy to look at without noticing. Say so loudly.
   if (!seen.land || !seen.water) {
     console.warn(
-      `[globe] base style is missing expected layers — land: ${seen.land}, water: ${seen.water}, of ${layers.length} layers`,
+      `[globe] base style is missing expected layers: land: ${seen.land}, water: ${seen.water}, of ${layers.length} layers`,
     );
   }
 }
@@ -167,7 +167,7 @@ export function WorldGlobe({ dots, feed, live, token }: WorldGlobeProps) {
       <Frame feed={feed} live={live}>
         <div className="flex h-full items-center justify-center px-6">
           <p className="max-w-sm text-center text-small text-text-muted prose">
-            The map is unavailable — no Mapbox token is configured. The race
+            The map is unavailable: no Mapbox token is configured. The race
             itself is unaffected.
           </p>
         </div>
@@ -216,7 +216,7 @@ export function WorldGlobe({ dots, feed, live, token }: WorldGlobeProps) {
           >
             <button
               type="button"
-              aria-label={`${dot.handle} — ${dot.label}`}
+              aria-label={`${dot.handle}, ${dot.label}`}
               className="relative block h-3 w-3 cursor-pointer rounded-full focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-text"
             >
               <span className="live-pulse absolute inset-0 rounded-full bg-text" />

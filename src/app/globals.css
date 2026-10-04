@@ -109,6 +109,148 @@ body {
   }
 }
 
+/* ---------------------------------------------------------------------------
+   Chrome autofill
+   ---------------------------------------------------------------------------
+   A saved password or address paints the field with the browser's own light
+   background, which on this page is a white box in the middle of a black form.
+   The text fill and caret are set explicitly because the autofill background
+   otherwise forces black text. The 9999s transition is the documented way to
+   stop the repaint rather than an animation anyone will ever see.
+   --------------------------------------------------------------------------- */
+
+input:-webkit-autofill {
+  -webkit-text-fill-color: var(--color-text);
+  caret-color: var(--color-text);
+  box-shadow: 0 0 0 1000px #111 inset;
+  transition: background-color 9999s ease-in-out 0s;
+}
+
+/* ---------------------------------------------------------------------------
+   Sponsor slots
+   ---------------------------------------------------------------------------
+   Ten empty outlines: five down each side at 1280px and wider, five along the
+   top and five along the bottom below it. Nothing sits inside a slot at rest,
+   because there are no sponsors and an empty promise drawn as a filled box
+   would be the first dishonest thing on the page.
+
+   Every colour here is a token or an alpha of one. The resting outline is
+   `--color-border`, which is what the specified 14% white composites to over
+   `--color-bg`; the hover and hairline variants use `color-mix` on the same
+   token rather than introducing a new literal.
+   --------------------------------------------------------------------------- */
+
+.sponsor-rail,
+.sponsor-strip {
+  position: fixed;
+  z-index: 30;
+  display: none;
+}
+
+.sponsor-slot {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid var(--color-border);
+  border-radius: 10px;
+  background: transparent;
+  color: var(--color-text);
+  font-family: var(--font-mono, ui-monospace, monospace);
+  font-size: 12px;
+  text-decoration: none;
+  transition: border-color 120ms ease, box-shadow 120ms ease;
+}
+
+.sponsor-slot__label {
+  opacity: 0;
+  transition: opacity 120ms ease;
+}
+
+.sponsor-slot:hover,
+.sponsor-slot:focus-visible {
+  border-color: color-mix(in srgb, var(--color-text) 70%, transparent);
+  box-shadow: inset 0 1px 0 color-mix(in srgb, var(--color-text) 35%, transparent);
+  outline: none;
+}
+
+.sponsor-slot:hover .sponsor-slot__label,
+.sponsor-slot:focus-visible .sponsor-slot__label {
+  opacity: 1;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .sponsor-slot,
+  .sponsor-slot__label {
+    transition: none;
+  }
+}
+
+/* 1340, not 1280.
+   The rails are 176px wide at a 16px inset, so they claim everything outside
+   192px from each edge. This product's content column is `max-w-4xl` (896px),
+   which at a 1280px viewport with a 15px scrollbar leaves only 184.5px each
+   side: the rails would sit about 7px into the column. 1340px is the first
+   round width where the column clears the rail with room to spare (about 22px
+   with a scrollbar, 29px without). Raising the breakpoint is the fix the design
+   calls for; shrinking the rails or the column would change the locked layout. */
+@media (min-width: 1340px) {
+  .sponsor-rail {
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+    top: 88px;
+    width: 176px;
+  }
+
+  .sponsor-rail--left {
+    left: 16px;
+  }
+
+  .sponsor-rail--right {
+    right: 16px;
+  }
+
+  .sponsor-rail .sponsor-slot {
+    height: min(88px, calc((100vh - 140px) / 5 - 12px));
+  }
+}
+
+@media (max-width: 1339.98px) {
+  .sponsor-strip {
+    display: flex;
+    gap: 8px;
+    left: 0;
+    right: 0;
+    padding: 6px 8px;
+    overflow-x: auto;
+    background: var(--color-bg);
+    scroll-snap-type: x proximity;
+  }
+
+  .sponsor-strip--top {
+    top: 0;
+    height: 44px;
+    border-bottom: 1px solid color-mix(in srgb, var(--color-text) 8%, transparent);
+  }
+
+  .sponsor-strip--bottom {
+    bottom: 0;
+    height: calc(44px + env(safe-area-inset-bottom));
+    padding-bottom: calc(6px + env(safe-area-inset-bottom));
+    border-top: 1px solid color-mix(in srgb, var(--color-text) 8%, transparent);
+  }
+
+  .sponsor-strip .sponsor-slot {
+    flex: 0 0 96px;
+    scroll-snap-align: start;
+  }
+
+  .has-sponsors {
+    padding-top: 44px;
+    padding-bottom: calc(44px + env(safe-area-inset-bottom));
+  }
+}
+
 /* The Mapbox canvas is a third-party surface inside our page. Its attribution
    control and popups ship their own light styling; these trim them back to the
    system rather than letting a white box appear on a black page. */

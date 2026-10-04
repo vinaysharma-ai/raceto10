@@ -57,7 +57,7 @@ export function ActivateForm({ durationLabel }: { durationLabel: string | null }
         </li>
         <li>
           Your starting count is recorded as{" "}
-          <span className="text-text">0</span> — the number we just verified.
+          <span className="text-text">0</span>, the number we just verified.
           Nothing you gained before this moment is held against you.
         </li>
         <li>
@@ -75,7 +75,7 @@ export function ActivateForm({ durationLabel }: { durationLabel: string | null }
       {/*
         Required, and labelled with the actual list rather than "I agree to the
         terms". This is the consent that `public_consent_at` records, and every
-        public view filters on it — so what the founder is agreeing to should be
+        public view filters on it, so what the founder is agreeing to should be
         the literal contents of their public row, not a link to a policy.
       */}
       <label className="mt-5 flex cursor-pointer items-start gap-3">

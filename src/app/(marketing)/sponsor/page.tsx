@@ -2,42 +2,40 @@ import type { Metadata } from "next";
 
 import { Footer } from "@/components/landing/footer";
 import { Nav } from "@/components/landing/nav";
-import { SponsorGrid } from "@/components/sponsors/sponsor-grid";
+import { TextLink } from "@/components/ui/button";
 import { NotOpenYet } from "@/components/ui/not-open-yet";
-import { getSponsorBoard } from "@/lib/queries/sponsor-slots";
-import { cheapestPriceCents, formatPriceCents } from "@/lib/sponsors/board";
-import { SPONSOR_TERMS, describeTerm } from "@/lib/sponsors/limits";
+import { env } from "@/lib/env";
 
 /**
- * `/sponsor` — the ten positions.
+ * `/sponsor` — the ten slots, and the truth about them.
  *
- * ## Not open yet, and it says so the same way `/join` does
+ * ## Why there is no grid here any more
  *
- * Sponsorship has no payment provider. The schema, the price list and the
- * exclusion constraint that makes double-selling impossible are all built and
- * tested, but nothing can take money, so the page shows the same
- * `NotOpenYet` panel `/join` uses rather than a buy button that fails.
+ * This page used to render ten cards with a price on each, read from a real
+ * price table and a real exclusion constraint. All of that was built and none
+ * of it could take money, so the page showed a price list above a notice saying
+ * nothing could be bought. A price nobody can pay is not information.
  *
- * That is the whole reason the panel is a shared component: two places where
- * the product says "not yet" should not drift into saying it differently.
+ * What is left is the notice, and the only two facts that are true: the slots
+ * exist, and they are not for sale yet. The slots themselves are drawn on the
+ * home page, empty, because that is what they are.
  *
- * ## What is still real on this page
+ * ## No rails here
  *
- * The positions, which ones are taken, and what each term costs. All of it read
- * from the database. What is absent is the ability to buy one, and the page
- * does not pretend otherwise.
+ * This page renders none of the slots it describes. Ten empty boxes around a
+ * page explaining that the boxes are empty is a joke at the reader's expense.
  */
 
 export const metadata: Metadata = {
   title: "Sponsor RaceTo10",
   description:
-    "Ten sponsor positions on the RaceTo10 site. Fixed prices, no bidding, terms of 1, 3 or 7 days.",
+    "Ten sponsor slots on the RaceTo10 home page. Not open yet, and nothing can be bought here today.",
 };
 
-export default async function SponsorPage() {
-  const board = await getSponsorBoard();
-  const pricing = board.ok ? board.pricing : [];
-  const cheapest = cheapestPriceCents(pricing);
+export default function SponsorPage() {
+  // Present only when the owner has configured an address. With none, the line
+  // is absent rather than pointing at a mailbox nobody reads.
+  const contact = env.NEXT_PUBLIC_CONTACT_EMAIL;
 
   return (
     <>
@@ -46,46 +44,31 @@ export default async function SponsorPage() {
       <main className="mx-auto w-full max-w-4xl flex-1 px-6 py-12">
         <h1 className="text-medium">Sponsor RaceTo10</h1>
 
-        <p className="mt-3 max-w-2xl text-small text-text-muted prose">
-          Ten positions on this site. A fixed price per term, no bidding and no
-          auction — if it is free, it is yours.
-          {cheapest === null
-            ? null
-            : ` Terms run ${SPONSOR_TERMS.map(describeTerm).join(", ")}, from ${formatPriceCents(cheapest)}.`}
-        </p>
-
         <div className="mt-8">
-          {board.ok ? (
-            <SponsorGrid slots={board.slots} pricing={board.pricing} />
-          ) : (
-            // An empty grid and an unreadable grid look identical, and only one
-            // of them means "everything is free". Say which.
-            //
-            // The reassurance stops here rather than repeating: the panel below
-            // already says nothing has been charged, and saying it twice in a
-            // row reads as protesting.
-            <p className="text-small text-text" role="alert">
-              The positions could not be loaded just now.
+          <NotOpenYet title="Sponsorship isn't open yet.">
+            <p>
+              Nothing can be bought here today. Slots will open once races are
+              running and the numbers are real.
             </p>
-          )}
+            <p>
+              Ten slots, five on each side of the home page, shown to everyone
+              watching the race.
+            </p>
+            {contact ? (
+              <p>
+                <a
+                  href={`mailto:${contact}`}
+                  className="text-text underline-offset-4 transition-colors hover:underline focus-visible:underline focus-visible:outline-none"
+                >
+                  Email us to be told when slots open.
+                </a>
+              </p>
+            ) : null}
+          </NotOpenYet>
         </div>
 
-        <div className="mt-12">
-          <NotOpenYet title="Sponsorship isn't open yet">
-            <p>
-              We haven&apos;t switched on payments for sponsor positions, so
-              there is no way to take one today.
-            </p>
-            <p>
-              The positions above are real — the ones marked open are open — but
-              nothing has been charged to anyone and nothing is reserved.
-            </p>
-            {/* No "leave your email and we'll tell you". Nothing in V1 sends
-                mail, and the home page's list says so in as many words — so
-                pointing here from there would be routing people to a promise
-                this page cannot keep. */}
-            <p>Positions will go on sale here once payments are switched on.</p>
-          </NotOpenYet>
+        <div className="mt-8">
+          <TextLink href="/">Back to the race</TextLink>
         </div>
       </main>
 

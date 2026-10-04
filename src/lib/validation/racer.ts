@@ -82,7 +82,7 @@ export const racerSchema = z.object({
     .transform((value) => normaliseXHandle(value))
     .refine(
       (value): value is string => value !== null,
-      "Add your X handle — it's how you appear on the board.",
+      "Add your X handle. It's how you appear on the board.",
     ),
 
   email: z

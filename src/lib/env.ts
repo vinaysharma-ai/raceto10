@@ -32,6 +32,15 @@ export type PublicEnv = {
    * join flow — could not be built or run at all without one.
    */
   NEXT_PUBLIC_MAPBOX_TOKEN: string | null;
+  /**
+   * Where a visitor writes to, or null.
+   *
+   * Optional for the same reason the Mapbox token is: the product is complete
+   * without it. It exists so that a page which has no action to offer can still
+   * offer a way to be told when one arrives, and a page that has no such address
+   * simply does not show the line.
+   */
+  NEXT_PUBLIC_CONTACT_EMAIL: string | null;
 };
 
 const problems: string[] = [];
@@ -39,21 +48,21 @@ const problems: string[] = [];
 /** Collects every problem rather than throwing on the first, so one run tells you all of them. */
 function absoluteUrl(name: keyof PublicEnv, value: string | undefined): string {
   if (!value) {
-    problems.push(`${name} — missing`);
+    problems.push(`${name}: missing`);
     return "";
   }
   try {
     new URL(value);
     return value;
   } catch {
-    problems.push(`${name} — must be an absolute URL, e.g. https://example.com`);
+    problems.push(`${name}: must be an absolute URL, e.g. https://example.com`);
     return "";
   }
 }
 
 function present(name: keyof PublicEnv, value: string | undefined): string {
   if (!value) {
-    problems.push(`${name} — missing`);
+    problems.push(`${name}: missing`);
     return "";
   }
   return value;
@@ -86,6 +95,7 @@ const env: PublicEnv = {
     process.env.NEXT_PUBLIC_APP_URL,
   ),
   NEXT_PUBLIC_MAPBOX_TOKEN: optional(process.env.NEXT_PUBLIC_MAPBOX_TOKEN),
+  NEXT_PUBLIC_CONTACT_EMAIL: optional(process.env.NEXT_PUBLIC_CONTACT_EMAIL),
 };
 
 if (problems.length > 0) {

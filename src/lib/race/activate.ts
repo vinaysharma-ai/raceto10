@@ -78,13 +78,13 @@ export function describeActivationFailure(reason: ActivationFailure): string {
     case "not_eligible":
       return "Your account doesn't qualify to enter yet.";
     case "no_consent":
-      return "Agree to race in public before starting — the board shows your name, handle, product and verified customer count.";
+      return "Agree to race in public before starting. The board shows your name, handle, product and verified customer count.";
     case "duration_unavailable":
-      return "We couldn't read the race duration just now. Nothing was started — try again in a moment.";
+      return "We couldn't read the race duration just now. Nothing was started. Try again in a moment.";
     case "verification_failed":
       return "We couldn't verify your account just now. Nothing was started. Your clock has not begun.";
     case "storage_error":
-      return "We couldn't start your race just now. Nothing was started — try again in a moment.";
+      return "We couldn't start your race just now. Nothing was started. Try again in a moment.";
   }
 }
 

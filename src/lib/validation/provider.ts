@@ -48,7 +48,7 @@ export const stripeKeySchema = z.preprocess(
       .max(STRIPE_KEY_MAX, "That is longer than a Stripe key.")
       .refine(
         (value) => !FULL_ACCESS_KEY.test(value),
-        "That is a full-access key. Create a restricted key with read-only permissions instead — RaceTo10 never needs to write to your account.",
+        "That is a full-access key. Create a restricted key with read-only permissions instead. RaceTo10 never needs to write to your account.",
       )
       .refine(
         (value) => RESTRICTED_KEY.test(value),

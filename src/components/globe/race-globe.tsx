@@ -23,7 +23,7 @@ export async function RaceGlobe() {
   const result = await getRaceBoard();
 
   if (!result.ok && process.env.NODE_ENV !== "production") {
-    console.warn(`[race-globe] no data rendered — ${result.reason}`);
+    console.warn(`[race-globe] no data rendered: ${result.reason}`);
   }
 
   const racers = result.ok ? result.board.racers : [];

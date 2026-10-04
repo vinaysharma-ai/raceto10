@@ -1,6 +1,6 @@
 "use client";
 
-import { useActionState } from "react";
+import { useActionState, useEffect, useState } from "react";
 
 import { joinWaitlist, type WaitlistState } from "@/app/actions/waitlist";
 import { Button } from "@/components/ui/button";
@@ -19,12 +19,22 @@ import { HONEYPOT_FIELD } from "@/lib/validation/waitlist";
  * pre-launch copy left on a page that is now post-launch.
  *
  * What is left is honest: this is for someone who is interested and not ready
- * to connect a payment provider yet. The body says plainly that nothing is sent
- * yet, because nothing in V1 sends mail — the success state has always been
- * careful not to promise a message, and the introduction now matches it.
+ * to connect a payment provider yet, and the one message it promises is a single
+ * note when the next race opens.
+ *
+ * ## The ten second deadline
+ *
+ * A server action that never answers leaves the button disabled and the page
+ * looking frozen, which reads as "it worked" to nobody. After ten seconds the
+ * form says it does not know whether the address was saved, because it does
+ * not — claiming either outcome would be a guess. If the action does answer
+ * afterwards, its own state replaces the message.
  */
 
 const INITIAL: WaitlistState = { status: "idle" };
+
+/** How long a submission may run before the form stops pretending to know. */
+const TIMEOUT_MS = 10_000;
 
 /** Display labels for the `customer_band` values. */
 const BANDS = [
@@ -35,23 +45,43 @@ const BANDS = [
 
 export function WaitlistForm() {
   const [state, formAction, pending] = useActionState(joinWaitlist, INITIAL);
+  const [timedOut, setTimedOut] = useState(false);
+
+  // Only ever sets state from the timer, and only while a submission is in
+  // flight. The flag is cleared when the next one starts rather than from the
+  // effect, so there is no render where a stale timeout is on screen.
+  useEffect(() => {
+    if (!pending) return;
+
+    const timer = setTimeout(() => setTimedOut(true), TIMEOUT_MS);
+    return () => clearTimeout(timer);
+  }, [pending]);
+
+  const done = state.status === "ok" || state.status === "duplicate";
 
   return (
     <section className="mx-auto w-full max-w-4xl px-6 pb-12">
       <div className="rounded-card border border-border bg-surface p-6">
-        {state.status === "ok" ? (
-          <p className="text-small text-text">You&apos;re on the list.</p>
+        {done ? (
+          <p className="text-small text-text" role="status">
+            {state.status === "duplicate"
+              ? "You're already on the list."
+              : "You're on the list."}
+          </p>
         ) : (
-          <form action={formAction} className="relative">
+          <form
+            action={formAction}
+            className="relative"
+            onSubmit={() => setTimedOut(false)}
+          >
             <h2 className="text-medium">Not ready to race yet?</h2>
             <p className="mt-2 max-w-lg text-small text-text-muted prose">
-              Leave your email and we&apos;ll be able to reach you. Nothing is
-              sent yet — there is no newsletter, and you will not get mail from
-              this.
+              Leave your email and we&apos;ll write once, when the next race
+              opens. No newsletter.
             </p>
 
             <div className="mt-6 flex flex-col gap-4">
-              <div>
+              <div className="flex flex-col gap-2">
                 <label htmlFor="email" className="text-small text-text-muted">
                   Email
                 </label>
@@ -62,7 +92,7 @@ export function WaitlistForm() {
                   required
                   autoComplete="email"
                   placeholder="you@company.com"
-                  className="mt-2 max-w-sm"
+                  className="max-w-sm"
                 />
               </div>
 
@@ -71,7 +101,7 @@ export function WaitlistForm() {
                   How many paying customers do you have right now?
                 </legend>
 
-                <div className="mt-3 flex flex-wrap gap-2">
+                <div className="mt-2 flex flex-wrap gap-2">
                   {BANDS.map((band) => (
                     <label key={band.value} className="cursor-pointer">
                       <input
@@ -99,9 +129,16 @@ export function WaitlistForm() {
               </p>
             ) : null}
 
+            {timedOut && pending ? (
+              <p className="mt-4 text-small text-text" role="alert">
+                This is taking longer than it should, and we don&apos;t know yet
+                whether your email was saved. Try again in a moment.
+              </p>
+            ) : null}
+
             <div className="mt-6">
               <Button type="submit" disabled={pending}>
-                Join the waitlist
+                {pending ? "Saving..." : "Join the waitlist"}
               </Button>
             </div>
 

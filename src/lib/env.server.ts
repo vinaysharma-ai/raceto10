@@ -48,7 +48,7 @@ function lazily<T>(
     const parsed = schema.safeParse(process.env);
     if (!parsed.success) {
       const detail = parsed.error.issues
-        .map((issue) => `${issue.path.join(".") || "(root)"} — ${issue.message}`)
+        .map((issue) => `${issue.path.join(".") || "(root)"}: ${issue.message}`)
         .join("\n  ");
       throw new Error(`Invalid ${label} environment configuration:\n  ${detail}`);
     }

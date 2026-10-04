@@ -71,11 +71,11 @@ export function describeConnectFailure(reason: ConnectFailure): string {
     case "insufficient_permission":
       return "That key is valid but can't read what we need. Give it Read access to Customers, Charges and Subscriptions, then paste it again.";
     case "not_read_only":
-      return "That key can write to your Stripe account. RaceTo10 only ever needs read access — create a restricted key with read permissions and no write access.";
+      return "That key can write to your Stripe account. RaceTo10 only ever needs read access: create a restricted key with read permissions and no write access.";
     case "account_in_use":
       return "That Stripe account is already connected to another race. One account can only back one entry.";
     case "unavailable":
-      return "We couldn't reach Stripe just now. Nothing was saved — try again in a moment.";
+      return "We couldn't reach Stripe just now. Nothing was saved. Try again in a moment.";
     case "no_racer":
       return "Finish setting up your profile before connecting a payment provider.";
     case "storage_error":

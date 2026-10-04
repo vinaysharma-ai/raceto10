@@ -18,6 +18,14 @@ import { HONEYPOT_FIELD, waitlistSchema } from "@/lib/validation/waitlist";
 export type WaitlistState =
   | { status: "idle" }
   | { status: "ok" }
+  /**
+   * Already on the list. Its own state so the form can say so plainly.
+   *
+   * SECURITY: this state exists only because the address was submitted, and it
+   * reveals that the address is stored. See the note on the return below before
+   * extending it.
+   */
+  | { status: "duplicate" }
   | { status: "error"; message: string };
 
 export async function joinWaitlist(
@@ -45,7 +53,20 @@ export async function joinWaitlist(
 
   const result = await addWaitlistSignup(parsed.data);
 
-  return result.ok
-    ? { status: "ok" }
-    : { status: "error", message: result.message };
+  if (!result.ok) return { status: "error", message: result.message };
+
+  // A repeat submission is reported as a repeat rather than folded into the
+  // success state, because the form has to answer a returning visitor
+  // truthfully: "you are already on the list" and "you are on the list" are the
+  // same fact, but only one of them tells them not to wonder whether it worked.
+  //
+  // The cost is real and is not papered over here. This makes an unauthenticated
+  // form submission answer "is this address on the list?" with a yes or a no,
+  // which `addWaitlistSignup` used to collapse deliberately. **Nothing in this
+  // path throttles it** — the per-IP limiter is planned for the safety pass and
+  // does not exist yet, so there is currently no bound on how many addresses can
+  // be tested. What keeps the exposure small is only that waitlist membership is
+  // not a secret worth harvesting, and that no other data is reachable from it.
+  // If that stops being true, this is the line that has to change.
+  return result.duplicate ? { status: "duplicate" } : { status: "ok" };
 }

@@ -13,6 +13,10 @@
 # testing
 /coverage
 
+# local screenshot evidence from the build phases; reviewed by hand, never shipped
+/.phase1-shots/
+/.fixtures/
+
 # next.js
 /.next/
 /out/
