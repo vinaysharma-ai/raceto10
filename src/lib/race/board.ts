@@ -22,6 +22,8 @@ export type RacerStatus =
   | "ready"
   | "racing"
   | "finished"
+  | "expired"
+  | "ineligible"
   | "verification_failed"
   | "withdrawn"
   | "disqualified";
@@ -129,7 +131,7 @@ export function globeDots(racers: PublicRacer[]): GlobeDot[] {
       (racer) =>
         racer.latitude !== null &&
         racer.longitude !== null &&
-        isRacingOrFinished(racer.status),
+        isOnTheBoard(racer.status),
     )
     .map((racer) => ({
       slug: racer.public_slug,
@@ -144,8 +146,16 @@ export function globeDots(racers: PublicRacer[]): GlobeDot[] {
     }));
 }
 
-function isRacingOrFinished(status: RacerStatus): boolean {
-  return status === "racing" || status === "finished";
+/**
+ * Whether a racer belongs on the board.
+ *
+ * `expired` is here deliberately. A board that quietly drops the founders who
+ * ran out of time is not a record of anything — it is a list of winners, which
+ * anybody can produce and which tells a reader nothing about whether the race
+ * was hard.
+ */
+function isOnTheBoard(status: RacerStatus): boolean {
+  return status === "racing" || status === "finished" || status === "expired";
 }
 
 // ---------------------------------------------------------------------------
@@ -161,7 +171,7 @@ function isRacingOrFinished(status: RacerStatus): boolean {
  * began.
  */
 export function racersOnTheBoard(racers: PublicRacer[]): PublicRacer[] {
-  return racers.filter((racer) => isRacingOrFinished(racer.status));
+  return racers.filter((racer) => isOnTheBoard(racer.status));
 }
 
 /** Verified, eligible, waiting for their clock. `01` §6 wants these separate. */
@@ -176,8 +186,35 @@ export function racersWaiting(racers: PublicRacer[]): PublicRacer[] {
  * in the story of the race — one got there first — and falling back to
  * insertion order would make the board's order depend on the database's mood.
  */
+/**
+ * Ranked: the winners first, then the running, then those who ran out of time.
+ *
+ * ## Why a finished race sorts by *time* and not by count
+ *
+ * Every finished racer has ten customers, so count cannot order them — it is the
+ * same number for all of them and would leave the winner decided by whatever
+ * order the database happened to return. The only thing that distinguishes two
+ * racers who both reached ten is how long it took, and that is what a reader
+ * wants to compare anyway.
+ *
+ * That is also why they sit above the runners rather than being mixed in: a race
+ * that is over is not competing with one that is still going, and a board that
+ * interleaved them would show a racer on 4 customers above one who finished.
+ */
 export function rankRacers(racers: PublicRacer[]): PublicRacer[] {
   return [...racers].sort((a, b) => {
+    const band = bandOf(a) - bandOf(b);
+    if (band !== 0) return band;
+
+    // Winners: fastest first.
+    if (a.status === "finished" && b.status === "finished") {
+      const aTook = finishedInMs(a) ?? Number.POSITIVE_INFINITY;
+      const bTook = finishedInMs(b) ?? Number.POSITIVE_INFINITY;
+      if (aTook !== bTook) return aTook - bTook;
+      return a.public_slug.localeCompare(b.public_slug);
+    }
+
+    // Racing: most customers first, then whoever started earlier.
     if (b.current_customer_count !== a.current_customer_count) {
       return b.current_customer_count - a.current_customer_count;
     }
@@ -189,6 +226,61 @@ export function rankRacers(racers: PublicRacer[]): PublicRacer[] {
     // Last resort, so the order is at least stable across identical requests.
     return a.public_slug.localeCompare(b.public_slug);
   });
+}
+
+/** 0 finished, 1 racing, 2 expired. Anything else sorts last. */
+function bandOf(racer: PublicRacer): number {
+  if (racer.status === "finished") return 0;
+  if (racer.status === "racing") return 1;
+  if (racer.status === "expired") return 2;
+  return 3;
+}
+
+/**
+ * How long a finished race took, in milliseconds, or null.
+ *
+ * Measured between activation and `reached_ten_at` — which is the tenth
+ * customer's first payment, not the moment a poll noticed. Computing it from the
+ * poll instead would make every race's time depend on when the reconciler
+ * happened to run, and two racers who finished minutes apart could appear hours
+ * apart.
+ */
+export function finishedInMs(
+  racer: Pick<PublicRacer, "activated_at" | "reached_ten_at">,
+): number | null {
+  if (!racer.activated_at || !racer.reached_ten_at) return null;
+
+  const from = Date.parse(racer.activated_at);
+  const to = Date.parse(racer.reached_ten_at);
+  if (Number.isNaN(from) || Number.isNaN(to)) return null;
+
+  return Math.max(0, to - from);
+}
+
+/**
+ * "3d 2h" / "4h 12m" / "12m".
+ *
+ * Two units at most, and never seconds. A race is days long, and "3d 2h 14m 9s"
+ * claims a precision that the thing being measured does not have — the finish
+ * instant is when a payment landed, not when we looked.
+ */
+export function formatDuration(ms: number): string {
+  const minutes = Math.floor(ms / 60_000);
+  if (minutes < 60) return `${minutes}m`;
+
+  const hours = Math.floor(minutes / 60);
+  if (hours < 24) return `${hours}h ${minutes % 60}m`;
+
+  return `${Math.floor(hours / 24)}d ${hours % 24}h`;
+}
+
+/** "finished in 3d 2h", or null when the duration is not knowable. */
+export function finishedLabel(
+  racer: Pick<PublicRacer, "status" | "activated_at" | "reached_ten_at">,
+): string | null {
+  if (racer.status !== "finished") return null;
+  const took = finishedInMs(racer);
+  return took === null ? null : `finished in ${formatDuration(took)}`;
 }
 
 /**

@@ -616,6 +616,7 @@ export type Database = {
           latitude: number | null
           longitude: number | null
           product_name: string | null
+          product_url: string | null
           public_slug: string | null
           race_end_at: string | null
           reached_ten_at: string | null

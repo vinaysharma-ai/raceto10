@@ -6,6 +6,7 @@ import { TextLink } from "@/components/ui/button";
 import { getRaceBoard } from "@/lib/queries/race-board";
 import {
   RACE_TARGET,
+  finishedLabel,
   progressOf,
   racersOnTheBoard,
   racersWaiting,
@@ -87,12 +88,10 @@ export default async function LeaderboardPage({
           ) : all.length === 0 ? (
             <div className="rounded-card border border-border bg-surface p-6">
               <p className="text-small text-text-muted prose">
-                Nobody is racing yet. The first founder to connect a payment
-                provider and be verified at zero customers starts the clock, and
-                this page fills up from there.
+                No races have started yet.
               </p>
               <div className="mt-5">
-                <TextLink href="/join">Be the first →</TextLink>
+                <TextLink href="/join">Be the first</TextLink>
               </div>
             </div>
           ) : shown.length === 0 ? (
@@ -189,14 +188,20 @@ function RacerRow({ racer, position }: { racer: PublicRacer; position: number })
       </div>
 
       <p className="mt-2 pl-8 text-small text-text-muted">
-        {finished ? (
-          // Green is reserved for genuinely live or verified state, and a
-          // finished race is exactly that.
-          <span className="text-live">finished</span>
+        {finishedLabel(racer) ? (
+          // How long it took, not just that it happened. Every finished racer
+          // has ten customers, so the only thing separating two of them is the
+          // time — and green is reserved for genuinely live state, which a won
+          // race is.
+          <span className="text-live">{finishedLabel(racer)}</span>
+        ) : racer.status === "expired" ? (
+          // Stated rather than hidden: a board that quietly drops the founders
+          // who did not make it is a list of winners, not a record of a race.
+          <span>time ran out</span>
         ) : remaining?.ended ? (
-          // A race whose clock ran out with no win. Stated rather than hidden:
-          // a board that quietly drops the ones who did not make it is not a
-          // record of anything.
+          // The clock has passed but the row has not been reconciled since, so
+          // it is still `racing`. Says the same thing until the next run writes
+          // the transition.
           <span>time ran out</span>
         ) : remaining ? (
           <span>
