@@ -75,6 +75,7 @@ export async function getOwnConnection(provider: string): Promise<{
   accountId: string | null;
   accountLabel: string | null;
   status: string;
+  keyLast4: string | null;
 } | null> {
   try {
     const racerId = await getCurrentRacerId();
@@ -85,7 +86,7 @@ export async function getOwnConnection(provider: string): Promise<{
 
     const { data } = await db
       .from("provider_connections")
-      .select("id, external_account_ref, connection_status")
+      .select("id, external_account_ref, connection_status, key_last4")
       .eq("racer_id", racerId)
       .eq("provider", provider)
       .maybeSingle();
@@ -98,6 +99,7 @@ export async function getOwnConnection(provider: string): Promise<{
       // There is no label column on the table; the id is what we have.
       accountLabel: null,
       status: data.connection_status,
+      keyLast4: data.key_last4,
     };
   } catch {
     return null;
@@ -161,6 +163,9 @@ export function connectionStore(): ConnectionStore {
           external_account_ref: row.accountId,
           connection_status: row.status,
           connected_at: new Date().toISOString(),
+          // Display only. The key itself is sealed separately, against this
+          // row's id, and is never read back outside a provider call.
+          key_last4: row.keyLast4,
         })
         .select("id")
         .single();
@@ -180,6 +185,7 @@ export function connectionStore(): ConnectionStore {
           ...(patch.status !== undefined ? { connection_status: patch.status } : {}),
           ...(patch.errorCode !== undefined ? { error_code: patch.errorCode } : {}),
           ...(patch.status === "connected" ? { connected_at: new Date().toISOString() } : {}),
+          ...(patch.keyLast4 !== undefined ? { key_last4: patch.keyLast4 } : {}),
           updated_at: new Date().toISOString(),
         })
         .eq("id", id);
@@ -266,6 +272,20 @@ export function connectionStore(): ConnectionStore {
         .in("status", ["registered", "verification_failed"]);
 
       if (error) throw new Error(error.message);
+    },
+
+    /** Read for disconnect's guard: a running clock must not be stoppable. */
+    async loadRacerStatus(racerId) {
+      const { createAdminClient } = await import("@/lib/supabase/admin");
+      const db = createAdminClient();
+
+      const { data } = await db
+        .from("racer")
+        .select("status")
+        .eq("id", racerId)
+        .maybeSingle();
+
+      return data?.status ?? null;
     },
 
     seal: (plaintext, connectionId) => sealForConnection(plaintext, connectionId),

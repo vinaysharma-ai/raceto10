@@ -3,6 +3,7 @@ import Link from "next/link";
 import { Suspense } from "react";
 
 import { signOut } from "@/app/actions/auth";
+import { disconnectStripe } from "@/app/actions/provider";
 import { ProfileForm } from "@/components/auth/profile-form";
 import { SignInButtons } from "@/components/auth/sign-in";
 import { ActivateForm } from "@/components/join/activate-form";
@@ -10,7 +11,9 @@ import { StripeConnectForm } from "@/components/join/stripe-connect-form";
 import { Footer } from "@/components/landing/footer";
 import { Nav } from "@/components/landing/nav";
 import { Button } from "@/components/ui/button";
+import { NotOpenYet } from "@/components/ui/not-open-yet";
 import { enabledProviders } from "@/lib/auth/providers";
+import { JOIN_CLOSED_BODY, JOIN_CLOSED_TITLE, joinOpen } from "@/lib/join/gate.ts";
 import { allowSelfStart } from "@/lib/env.server";
 import { getJoinState } from "@/lib/queries/join-state";
 import { describeDuration } from "@/lib/race/config";
@@ -138,11 +141,34 @@ export default async function JoinPage({
   );
 }
 
+/**
+ * Shown in place of the connect form while signups are closed.
+ *
+ * The same panel `/sponsor` uses, because two places where the product says
+ * "not yet" should not drift into saying it differently.
+ */
+function JoinClosed() {
+  return (
+    <NotOpenYet title={JOIN_CLOSED_TITLE}>
+      <p>{JOIN_CLOSED_BODY}</p>
+      <p>
+        You can still sign in and look around, and nothing you have already
+        entered has changed.
+      </p>
+    </NotOpenYet>
+  );
+}
+
 async function JoinStage({ error }: { error?: string }) {
   const [{ state, durationDays }, available] = await Promise.all([
     getJoinState(),
     enabledProviders(),
   ]);
+
+  // Read once, on the server, and used for every place the connect step would
+  // otherwise render. The action checks the same function, so the page and the
+  // action cannot disagree about whether the door is open.
+  const open = joinOpen();
 
   // Phrased through the one helper, so "7" never reaches the page as a bare
   // number. `duration` is a count of days, not a sentence.
@@ -189,7 +215,13 @@ async function JoinStage({ error }: { error?: string }) {
           <ProfileForm profile={state.profile} />
         ) : null}
 
-        {state.stage === "no-connection" ? <StripeConnectForm /> : null}
+        {state.stage === "no-connection" ? (
+          open ? (
+            <StripeConnectForm />
+          ) : (
+            <JoinClosed />
+          )
+        ) : null}
 
         {state.stage === "connection-unhealthy" ? (
           <>
@@ -201,7 +233,7 @@ async function JoinStage({ error }: { error?: string }) {
                 was changed in your account.
               </p>
             </div>
-            <StripeConnectForm />
+            {open ? <StripeConnectForm /> : <JoinClosed />}
           </>
         ) : null}
 
@@ -218,7 +250,7 @@ async function JoinStage({ error }: { error?: string }) {
                 Your clock has not started.
               </p>
             </div>
-            <StripeConnectForm />
+            {open ? <StripeConnectForm /> : <JoinClosed />}
           </>
         ) : null}
 
@@ -243,6 +275,32 @@ async function JoinStage({ error }: { error?: string }) {
               </li>
               <li>You can join while other races are already running.</li>
             </ul>
+
+            {/* Which key, not the key. Four characters are enough to tell two
+                of your own keys apart and useless to anybody else, and they are
+                the only part of the credential stored unsealed. */}
+            {state.connection.keyLast4 ? (
+              <p className="mt-4 text-small text-text-muted">
+                Connected with the Stripe key ending{" "}
+                <span className="text-text">{state.connection.keyLast4}</span>.
+              </p>
+            ) : null}
+
+            {/* Available before the clock starts and withdrawn once it does.
+                A running race is not something a button should be able to
+                stop, and deleting the key mid-race would freeze the count with
+                no way to explain why. */}
+            <div className="mt-6 flex flex-wrap items-center gap-4">
+              <form action={disconnectStripe}>
+                <Button type="submit" variant="secondary">
+                  Disconnect
+                </Button>
+              </form>
+              <p className="text-small text-text-muted prose">
+                Removes the key we hold and returns you to the connect step. Your
+                Stripe account is not changed.
+              </p>
+            </div>
 
             {/* The start control is rendered only when the owner has turned
                 self-start on. Activation is a batch the owner runs, so the

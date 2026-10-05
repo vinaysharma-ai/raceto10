@@ -107,6 +107,28 @@ export function roundCoordinate(value: number | null): number | null {
   return Math.round(value * 10) / 10;
 }
 
+/**
+ * The caller's IP, as far as the platform will say.
+ *
+ * Used only as a rate-limit subject, never stored and never shown. Vercel puts
+ * the client address first in `x-forwarded-for`; `x-real-ip` is the fallback the
+ * platform also sets. Anything else — a missing header, an empty one — is
+ * "unknown", which is a single shared bucket rather than no bucket at all.
+ *
+ * That last choice matters: returning null and skipping the limit would make a
+ * stripped header the way to bypass it. Everybody who cannot be identified
+ * shares one allowance, which is the conservative direction.
+ */
+export function clientIp(headers: Headers): string {
+  const forwarded = headers.get("x-forwarded-for");
+  if (forwarded) {
+    const first = forwarded.split(",")[0]?.trim();
+    if (first) return first;
+  }
+
+  return text(headers.get("x-real-ip")) ?? "unknown";
+}
+
 /** True when there is enough here to place a dot on the globe. */
 export function isPlottable(geo: {
   latitude: number | null;

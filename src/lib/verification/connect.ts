@@ -75,6 +75,24 @@ export type ExistingConnection = {
   status: string;
 };
 
+/**
+ * The last four characters of a key, for showing somebody which key is
+ * connected.
+ *
+ * Four characters of a key that has already been required to start `rk_` are
+ * not a disclosure: the prefix is public, the key is useless without the rest,
+ * and Stripe prints the same four in its own dashboard. What it is good for is
+ * the one thing it is for — letting a founder recognise which of their keys
+ * this is.
+ *
+ * Returns the empty string for anything shorter than four characters, which
+ * cannot happen for a key that passed the prefix rules, and is a safer answer
+ * than four characters of something that is not a key.
+ */
+export function last4Of(secretKey: string): string {
+  return secretKey.length >= 4 ? secretKey.slice(-4) : "";
+}
+
 export type StoredCredential = {
   ciphertext: string;
   keyVersion: number;
@@ -105,11 +123,20 @@ export type ConnectionStore = {
     accountId: string;
     accountLabel: string | null;
     status: string;
+    /** The last four characters, for display. Never the key. */
+    keyLast4: string;
   }): Promise<{ id: string }>;
 
   updateConnection(
     id: string,
-    patch: { accountId?: string; accountLabel?: string | null; status?: string; errorCode?: string | null },
+    patch: {
+      accountId?: string;
+      accountLabel?: string | null;
+      status?: string;
+      errorCode?: string | null;
+      /** `null` clears it, which is what disconnect does. */
+      keyLast4?: string | null;
+    },
   ): Promise<void>;
 
   putCredential(connectionId: string, sealed: StoredCredential): Promise<void>;
@@ -155,6 +182,15 @@ export type ConnectionStore = {
    * one.
    */
   markReady(racerId: string): Promise<void>;
+
+  /**
+   * The racer's current status, or null.
+   *
+   * Needed by disconnect, which must refuse once a clock is running. A status
+   * check in the caller would be a check that can be forgotten; here it is part
+   * of the operation.
+   */
+  loadRacerStatus(racerId: string): Promise<string | null>;
 };
 
 // ---------------------------------------------------------------------------
@@ -388,6 +424,9 @@ export async function connectProviderAccount(
         accountLabel: resolved.accountLabel ?? null,
         status: "connected",
         errorCode: null,
+        // Re-stamped on every connect: the racer pasted a key, and the
+        // reasonable reading is that this is the one they want used.
+        keyLast4: last4Of(apiKey),
       });
 
       // Re-sealed even when the account is unchanged: the racer pasted a key,
@@ -420,6 +459,7 @@ export async function connectProviderAccount(
       accountId,
       accountLabel: resolved.accountLabel ?? null,
       status: "connected",
+      keyLast4: last4Of(apiKey),
     });
 
     await store.putCredential(created.id, store.seal(apiKey, created.id));
@@ -454,6 +494,63 @@ export async function connectProviderAccount(
  * different fixes: this one is usually a key the racer revoked in Stripe, and
  * the racer has to return and paste a new one.
  */
+/**
+ * Disconnecting, before a race has started.
+ *
+ * ## Order, and why the credential goes first
+ *
+ * The key is deleted before the connection is marked revoked. The other order
+ * leaves a window in which the row says `revoked` while a live, decryptable
+ * credential for a real Stripe account is still sealed in the vault — and
+ * nothing will ever come back to clean it up, because every reader now treats
+ * the connection as dead. Deleting first means the worst case is a connection
+ * that still claims to be healthy with no key behind it, which the next read
+ * finds and reports honestly.
+ *
+ * ## What this does not do
+ *
+ * It does not revoke anything at Stripe. The key is the racer's own, created in
+ * their dashboard; we hold a copy and this deletes the copy. Saying "your key
+ * has been revoked" would be a claim about their account that we cannot make.
+ *
+ * Refused once a race is running. A clock that has started is not something a
+ * button should be able to stop, and deleting the key mid-race would freeze the
+ * count at whatever it happened to be with no way to explain why.
+ */
+export async function disconnectProviderAccount(
+  store: ConnectionStore,
+  providerId: string,
+): Promise<{ ok: true } | { ok: false; reason: "no_racer" | "no_connection" | "already_racing" | "storage_error" }> {
+  const racerId = await store.currentRacerId();
+  if (!racerId) return { ok: false, reason: "no_racer" };
+
+  try {
+    const existing = await store.findOwnConnection(racerId, providerId);
+    if (!existing) return { ok: false, reason: "no_connection" };
+
+    const racer = await store.loadRacerStatus(racerId);
+    if (racer === "racing" || racer === "finished") {
+      return { ok: false, reason: "already_racing" };
+    }
+
+    await store.clearCredential(existing.id);
+    await store.updateConnection(existing.id, {
+      status: "revoked",
+      errorCode: "disconnected",
+      // Cleared with the key: it describes a credential that no longer exists,
+      // and leaving it would show the next visitor a fingerprint of a key that
+      // is gone.
+      keyLast4: null,
+    });
+
+    return { ok: true };
+  } catch {
+    // Category only. See the note on the probe handler.
+    console.error("[provider] disconnect failed", { code: "storage_error" });
+    return { ok: false, reason: "storage_error" };
+  }
+}
+
 export async function markConnectionInvalid(
   store: ConnectionStore,
   connectionId: string,

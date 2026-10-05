@@ -1,5 +1,9 @@
 "use server";
 
+import { headers } from "next/headers";
+
+import { clientIp } from "@/lib/geo";
+import { consume, describeLimit } from "@/lib/queries/rate-limit";
 import { addWaitlistSignup } from "@/lib/queries/waitlist";
 import { HONEYPOT_FIELD, waitlistSchema } from "@/lib/validation/waitlist";
 
@@ -32,6 +36,27 @@ export async function joinWaitlist(
   _previous: WaitlistState,
   formData: FormData,
 ): Promise<WaitlistState> {
+  // --- The rate limit ------------------------------------------------------
+  //
+  // Five per IP per hour. This bounds two things: the writes, and the
+  // "already on the list" answer, which is otherwise an unauthenticated way to
+  // ask whether an address is stored. Neither is a large exposure on its own;
+  // together they are the reason this exists.
+  //
+  // Fails OPEN, unlike key verification. A database problem should not be the
+  // reason a genuine signup is refused, and the operation behind this is one
+  // insert rather than a call to somebody else's paid API.
+  //
+  // Counted before the honeypot, so a bot filling that field is still counted
+  // against the allowance rather than getting a free pass.
+  const limit = await consume("waitlistSignup", clientIp(await headers()), {
+    failClosed: false,
+  });
+
+  if (!limit.allowed) {
+    return { status: "error", message: describeLimit(limit.retryAfterMs) };
+  }
+
   // Honeypot. Accept silently rather than rejecting — telling a bot it was
   // caught only teaches whoever wrote it to stop filling this field in.
   const trap = formData.get(HONEYPOT_FIELD);

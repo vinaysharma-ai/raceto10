@@ -25,6 +25,14 @@ export type JoinConnection = {
   /** The connection row's id, used to decide which panel to show. */
   id: string;
   status: string;
+  /**
+   * The last four characters of the key, or null.
+   *
+   * Not the key, and not derivable into one. It exists so a founder can tell
+   * which of their Stripe keys this connection is using, which is otherwise
+   * unanswerable — the key itself is sealed and never read back.
+   */
+  keyLast4: string | null;
 };
 
 export type JoinRace = {
@@ -84,13 +92,17 @@ export async function getJoinState(): Promise<JoinView> {
   // read once the racer row is known.
   const { data: connection } = await db
     .from("provider_connections")
-    .select("id, connection_status")
+    .select("id, connection_status, key_last4")
     .eq("racer_id", racer.id)
     .eq("provider", "stripe")
     .maybeSingle();
 
   const conn: JoinConnection | null = connection
-    ? { id: connection.id, status: connection.connection_status }
+    ? {
+        id: connection.id,
+        status: connection.connection_status,
+        keyLast4: connection.key_last4,
+      }
     : null;
 
   // --- Already racing, or done -------------------------------------------

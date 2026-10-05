@@ -5,6 +5,7 @@ import { FAKE_RESTRICTED_LIVE_KEY, FAKE_RESTRICTED_TEST_KEY } from "./test-fixtu
 
 import {
   connectProviderAccount,
+  disconnectProviderAccount,
   markConnectionInvalid,
   type ConnectionStore,
   type ExistingConnection,
@@ -37,7 +38,12 @@ type Recorded = { method: string; args: unknown[] };
 
 function fakeStore(
   overrides: Partial<ConnectionStore> = {},
-  options: { racerId?: string | null; existing?: ExistingConnection | null; heldBy?: { id: string; racerId: string } | null } = {},
+  options: {
+    racerId?: string | null;
+    existing?: ExistingConnection | null;
+    heldBy?: { id: string; racerId: string } | null;
+    racerStatus?: string | null;
+  } = {},
 ): { store: ConnectionStore; recorded: Recorded[] } {
   const recorded: Recorded[] = [];
   const log = (method: string, ...args: unknown[]) => recorded.push({ method, args });
@@ -73,6 +79,10 @@ function fakeStore(
     },
     async markReady(racerId) {
       log("markReady", racerId);
+    },
+    async loadRacerStatus(racerId) {
+      log("loadRacerStatus", racerId);
+      return options.racerStatus ?? "ready";
     },
     seal(plaintext, connectionId) {
       log("seal", plaintext, connectionId);
@@ -695,4 +705,102 @@ test("outside production a test key is accepted, which is how this is worked on"
     if (before === undefined) delete env.NODE_ENV;
     else env.NODE_ENV = before;
   }
+});
+
+
+// ---------------------------------------------------------------------------
+// Disconnecting
+// ---------------------------------------------------------------------------
+
+/**
+ * Disconnect, before a race starts.
+ *
+ * The two claims worth proving are both about what is left behind: that the
+ * sealed key is gone, and that the connection says so. The order matters as
+ * much as the outcome — the credential is deleted first, so there is no window
+ * in which the row reads `revoked` while a live key for a real Stripe account
+ * is still sealed and nothing will ever come back for it.
+ */
+test("disconnect deletes the key and revokes the connection", async () => {
+  const { store, recorded } = fakeStore({}, {
+    existing: { id: CONNECTION_ID, accountId: ACCOUNT, status: "connected" },
+  });
+
+  const outcome = await disconnectProviderAccount(store, "stripe");
+
+  assert.equal(outcome.ok, true);
+
+  const cleared = recorded.find((r) => r.method === "clearCredential");
+  assert.equal(cleared?.args[0], CONNECTION_ID, "the stored key was not deleted");
+
+  const updated = recorded.find((r) => r.method === "updateConnection");
+  assert.equal(updated?.args[0], CONNECTION_ID);
+  assert.equal((updated?.args[1] as { status?: string }).status, "revoked");
+});
+
+test("the key is deleted before the connection is marked revoked", async () => {
+  const { store, recorded } = fakeStore({}, {
+    existing: { id: CONNECTION_ID, accountId: ACCOUNT, status: "connected" },
+  });
+
+  await disconnectProviderAccount(store, "stripe");
+
+  const clearAt = recorded.findIndex((r) => r.method === "clearCredential");
+  const revokeAt = recorded.findIndex((r) => r.method === "updateConnection");
+
+  assert.ok(clearAt >= 0 && revokeAt >= 0);
+  assert.ok(
+    clearAt < revokeAt,
+    "the connection was revoked while the key was still sealed",
+  );
+});
+
+test("disconnect clears the stored last four with the key", async () => {
+  // They describe a credential that no longer exists. Left behind, the next
+  // person to open the page sees a fingerprint of a key that is gone.
+  const { store, recorded } = fakeStore({}, {
+    existing: { id: CONNECTION_ID, accountId: ACCOUNT, status: "connected" },
+  });
+
+  await disconnectProviderAccount(store, "stripe");
+
+  const patch = recorded.find((r) => r.method === "updateConnection")?.args[1] as {
+    keyLast4?: string | null;
+  };
+  assert.equal(patch.keyLast4, null);
+});
+
+test("disconnect refuses once the clock is running", async () => {
+  for (const status of ["racing", "finished"]) {
+    const { store, recorded } = fakeStore({}, {
+      existing: { id: CONNECTION_ID, accountId: ACCOUNT, status: "connected" },
+      racerStatus: status,
+    });
+
+    const outcome = await disconnectProviderAccount(store, "stripe");
+
+    assert.equal(outcome.ok, false);
+    if (!outcome.ok) assert.equal(outcome.reason, "already_racing");
+    assert.equal(
+      recorded.some((r) => r.method === "clearCredential"),
+      false,
+      `the key was deleted during a ${status} race`,
+    );
+  }
+});
+
+test("disconnect with no connection is a no-op, not an error to report", async () => {
+  const { store } = fakeStore({}, { existing: null });
+  const outcome = await disconnectProviderAccount(store, "stripe");
+
+  assert.equal(outcome.ok, false);
+  if (!outcome.ok) assert.equal(outcome.reason, "no_connection");
+});
+
+test("disconnect without a racer refuses rather than guessing at one", async () => {
+  const { store } = fakeStore({}, { racerId: null });
+  const outcome = await disconnectProviderAccount(store, "stripe");
+
+  assert.equal(outcome.ok, false);
+  if (!outcome.ok) assert.equal(outcome.reason, "no_racer");
 });

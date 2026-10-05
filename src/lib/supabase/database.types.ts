@@ -80,6 +80,7 @@ export type Database = {
           error_code: string | null
           external_account_ref: string | null
           id: string
+          key_last4: string | null
           last_reconcile_at: string | null
           last_verified_at: string | null
           provider: string
@@ -93,6 +94,7 @@ export type Database = {
           error_code?: string | null
           external_account_ref?: string | null
           id?: string
+          key_last4?: string | null
           last_reconcile_at?: string | null
           last_verified_at?: string | null
           provider: string
@@ -106,6 +108,7 @@ export type Database = {
           error_code?: string | null
           external_account_ref?: string | null
           id?: string
+          key_last4?: string | null
           last_reconcile_at?: string | null
           last_verified_at?: string | null
           provider?: string
@@ -288,6 +291,7 @@ export type Database = {
           latitude: number | null
           longitude: number | null
           product_name: string | null
+          product_url: string | null
           profile_id: string | null
           public_consent_at: string | null
           public_slug: string | null
@@ -308,6 +312,7 @@ export type Database = {
           latitude?: number | null
           longitude?: number | null
           product_name?: string | null
+          product_url?: string | null
           profile_id?: string | null
           public_consent_at?: string | null
           public_slug?: string | null
@@ -328,6 +333,7 @@ export type Database = {
           latitude?: number | null
           longitude?: number | null
           product_name?: string | null
+          product_url?: string | null
           profile_id?: string | null
           public_consent_at?: string | null
           public_slug?: string | null
@@ -344,6 +350,33 @@ export type Database = {
             referencedColumns: ["id"]
           },
         ]
+      }
+      rate_limit_counter: {
+        Row: {
+          attempts: number
+          bucket: string
+          id: string
+          subject: string
+          updated_at: string
+          window_start: string
+        }
+        Insert: {
+          attempts?: number
+          bucket: string
+          id?: string
+          subject: string
+          updated_at?: string
+          window_start: string
+        }
+        Update: {
+          attempts?: number
+          bucket?: string
+          id?: string
+          subject?: string
+          updated_at?: string
+          window_start?: string
+        }
+        Relationships: []
       }
       reconciliation_runs: {
         Row: {
@@ -664,6 +697,8 @@ export type Database = {
         | "verification_failed"
         | "withdrawn"
         | "disqualified"
+        | "ineligible"
+        | "expired"
       slot_placement:
         | "sidebar-left"
         | "sidebar-right"
@@ -816,6 +851,8 @@ export const Constants = {
         "verification_failed",
         "withdrawn",
         "disqualified",
+        "ineligible",
+        "expired",
       ],
       slot_placement: [
         "sidebar-left",
