@@ -12,9 +12,41 @@ import { getCurrentRacerId } from "@/lib/queries/provider-connection";
  * actually lives — see the note on it below.
  */
 
-export function activationStore(): ActivationStore {
+/**
+ * Every racer waiting for a clock, oldest first.
+ *
+ * The owner's batch reads this. Ordered by when they finished registering, so
+ * somebody who has been waiting longest starts first — an unordered read would
+ * make the order depend on the database's mood, and the first founder to sign up
+ * would have no reason to be the last to start.
+ */
+export async function readyRacerIds(): Promise<string[]> {
+  const { createAdminClient } = await import("@/lib/supabase/admin");
+  const db = createAdminClient();
+
+  const { data, error } = await db
+    .from("racer")
+    .select("id")
+    .eq("status", "ready")
+    .order("created_at", { ascending: true });
+
+  if (error) throw new Error(error.message);
+  return (data ?? []).map((row) => row.id);
+}
+
+/**
+ * The activation store, for one racer.
+ *
+ * The parameter exists for the owner's batch, which has no session and
+ * therefore no `currentRacerId`. It is deliberately a required-looking
+ * parameter rather than a second function: two stores that differ only in where
+ * the racer id comes from is how one of them ends up missing a method.
+ *
+ * Omitting it keeps the session-scoped behaviour every other caller relies on.
+ */
+export function activationStore(racerId?: string): ActivationStore {
   return {
-    currentRacerId: getCurrentRacerId,
+    currentRacerId: racerId ? async () => racerId : getCurrentRacerId,
 
     async loadRacer(racerId): Promise<RacerState | null> {
       const { createAdminClient } = await import("@/lib/supabase/admin");
@@ -89,6 +121,62 @@ export function activationStore(): ActivationStore {
         return status;
       }
       return null;
+    },
+
+    /**
+     * Out of the batch, permanently.
+     *
+     * Conditional on the prior status for the same reason `beginActivation` is:
+     * a racer whose clock is running must not be pulled out of a race by a
+     * stale re-check. `ready` and `verification_failed` are the only states this
+     * can move.
+     */
+    async markIneligible(racerId) {
+      const { createAdminClient } = await import("@/lib/supabase/admin");
+      const db = createAdminClient();
+
+      const { error } = await db
+        .from("racer")
+        .update({ status: "ineligible" })
+        .eq("id", racerId)
+        .in("status", ["ready", "verification_failed"]);
+
+      if (error) throw new Error(error.message);
+    },
+
+    /**
+     * Deletes the sealed key behind a racer's connection.
+     *
+     * Resolves the connection first, because the vault is keyed on the
+     * connection's id rather than on the racer. A racer with no connection has
+     * nothing to delete and no error to report — the promise is that no key is
+     * held, and none is.
+     *
+     * A failure here throws rather than being swallowed. Activation reports it
+     * as a storage problem, which is the truth, and the racer stays `ineligible`
+     * with the owner able to see why. Silence would leave a live credential for
+     * a racer who is never coming back, which is exactly what this exists to
+     * prevent.
+     */
+    async deleteCredential(racerId) {
+      const { createAdminClient } = await import("@/lib/supabase/admin");
+      const db = createAdminClient();
+
+      const { data: connection, error: readError } = await db
+        .from("provider_connections")
+        .select("id")
+        .eq("racer_id", racerId)
+        .maybeSingle();
+
+      if (readError) throw new Error(readError.message);
+      if (!connection) return;
+
+      const { error } = await db
+        .from("provider_credentials")
+        .delete()
+        .eq("provider_connection_id", connection.id);
+
+      if (error) throw new Error(error.message);
     },
 
     raceDurationDays: getRaceDuration,

@@ -111,6 +111,24 @@ export type ActivationStore = {
   loadRacer(racerId: string): Promise<RacerState | null>;
 
   /**
+   * Moves a racer to `ineligible`, because the gate was re-run and failed.
+   *
+   * Conditional on the current status, so a racer whose clock is somehow already
+   * running cannot be pulled back out of a race by a stale re-check.
+   */
+  markIneligible(racerId: string): Promise<void>;
+
+  /**
+   * Deletes the sealed credential for a racer's connection.
+   *
+   * Called on every terminal state, and the reason it is on this interface
+   * rather than left to the caller is that /privacy makes a promise about it:
+   * "It is deleted when your race ends". A promise kept at four call sites by
+   * four different people is a promise that will eventually be kept at three.
+   */
+  deleteCredential(racerId: string): Promise<void>;
+
+  /**
    * The racer's provider connection, if any.
    *
    * `accountId` is carried because the Connect adapter reads against it with a
@@ -311,7 +329,40 @@ export async function activateRacer(
       mrrMinor,
     });
 
-    if (!verdict.eligible) return refuse("not_eligible");
+    // --- The re-check failed ------------------------------------------------
+    //
+    // The account had customers or revenue at the moment the clock was due to
+    // start. Three things happen, and all three matter:
+    //
+    //   1. The status becomes `ineligible`. Left as `ready`, this racer would sit
+    //      in every future activation batch, re-checked each time, and the board
+    //      would count them as waiting for a clock that is never going to start.
+    //   2. The key is deleted. They are not going to race, and /privacy says the
+    //      key is deleted when the race ends — this is a race that ended before
+    //      it began. Holding a live credential for an account we have no
+    //      remaining reason to read is the one thing the vault is built to avoid.
+    // NOT DONE: the event. `race_event_type` is
+    // `joined | activated | customer_milestone | finished`, with no value for a
+    // racer who failed the gate, so writing one needs an enum migration that has
+    // not been approved. Nothing is published about this racer either way — they
+    // never became public — so the only thing missing is the audit line, not the
+    // honesty of the board.
+    //
+    // No email is sent and none is owed: they were told at registration that a
+    // change would stop the clock, and nothing has been published about them.
+    if (!verdict.eligible) {
+      await store.markIneligible(racerId);
+
+      // Deleted after the status, and deliberately not before: if this throws,
+      // the racer is already `ineligible` and out of the batch, and the
+      // credential is then the only thing left on the failure path. The reverse
+      // order would delete a key for a racer who then stayed `ready` and could
+      // still be activated with no credential — a race that starts and can never
+      // be counted.
+      await store.deleteCredential(racerId);
+
+      return refuse("not_eligible");
+    }
 
     // --- Write ---------------------------------------------------------------
     //

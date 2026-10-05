@@ -95,6 +95,12 @@ function fakeStore(
     async recordActivationSnapshot(input) {
       log("recordActivationSnapshot", input);
     },
+    async markIneligible(racerId) {
+      log("markIneligible", racerId);
+    },
+    async deleteCredential(racerId) {
+      log("deleteCredential", racerId);
+    },
     async recordActivationEvent(input) {
       log("recordActivationEvent", input);
     },
@@ -559,4 +565,77 @@ test("the baseline written is the one read from the provider", async () => {
   assert.equal(begun.baselineCustomerCount, 0);
   // The count is derived from the provider page, never from an argument.
   assert.equal(begun.racerId, RACER);
+});
+
+
+// ---------------------------------------------------------------------------
+// The key is deleted when the re-check fails
+// ---------------------------------------------------------------------------
+
+/**
+ * A racer who passed the gate at registration and fails it at activation.
+ *
+ * Both halves matter and they are not the same claim. The status change takes
+ * them out of every future activation batch — left as `ready`, the owner's batch
+ * would re-check them forever and the board would count them as waiting for a
+ * clock that is never coming. The deletion is the promise /privacy makes: the
+ * key is deleted when the race ends, and this is a race that ended before it
+ * began.
+ */
+test("a failed re-check marks the racer ineligible and deletes the key", async () => {
+  const { store, recorded } = fakeStore();
+
+  const outcome = await activateRacer(
+    store,
+    // Registration passed with an empty account; by activation there is one.
+    adapter({ customers: customers([{ id: "cus_1", created: 1_700_000_000 }]) }),
+    true,
+  );
+
+  assert.equal(outcome.ok, false);
+  if (!outcome.ok) assert.equal(outcome.reason, "not_eligible");
+
+  assert.equal(
+    recorded.some((r) => r.method === "markIneligible"),
+    true,
+    "the racer was left in the activation batch",
+  );
+  assert.equal(
+    recorded.some((r) => r.method === "deleteCredential"),
+    true,
+    "the key survived a race that ended before it began",
+  );
+});
+
+test("the status is written before the key is deleted", async () => {
+  // The order is the safety property. Deleted first, a throw leaves the racer
+  // `ready` with no credential — activatable, and uncountable once started.
+  const { store, recorded } = fakeStore();
+
+  await activateRacer(
+    store,
+    adapter({ customers: customers([{ id: "cus_1", created: 1_700_000_000 }]) }),
+    true,
+  );
+
+  const statusAt = recorded.findIndex((r) => r.method === "markIneligible");
+  const deleteAt = recorded.findIndex((r) => r.method === "deleteCredential");
+
+  assert.ok(statusAt >= 0 && deleteAt >= 0);
+  assert.ok(statusAt < deleteAt, "the key was deleted before the status was written");
+});
+
+test("a successful activation deletes nothing", async () => {
+  // The other direction, and the one that would be catastrophic to get wrong:
+  // deleting the key as the clock starts leaves a race with no way to count.
+  const { store, recorded } = fakeStore();
+
+  const outcome = await activateRacer(store, adapter(), true);
+
+  assert.equal(outcome.ok, true);
+  assert.equal(
+    recorded.some((r) => r.method === "deleteCredential"),
+    false,
+    "the key was deleted on a successful activation",
+  );
 });
