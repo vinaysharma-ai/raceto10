@@ -1,3 +1,4 @@
+import { CredentialError } from "../verification/stripe/restricted.ts";
 import type { ProviderConnection, ProviderPayment, VerificationProvider } from "../verification/types.ts";
 
 /**
@@ -49,7 +50,13 @@ export type ActiveRacer = {
   reachedTenAt: Date | null;
 };
 
-export type ReconcileFailure = "no_connection" | "connection_not_ready" | "provider_failed" | "storage_error";
+export type ReconcileFailure =
+  | "no_connection"
+  | "connection_not_ready"
+  | "provider_failed"
+  /** The key was refused. Distinct from `provider_failed`, which is transient. */
+  | "connection_lost"
+  | "storage_error";
 
 export type ReconcileOutcome =
   | {
@@ -135,8 +142,12 @@ export type ReconcileStore = {
    * The count is not touched — it is frozen precisely by leaving it alone. What
    * changes is the connection, so nothing reads it again until a racer
    * reconnects, and the public surface can say why it stopped moving.
+   *
+   * Returns whether this call was the one that broke it. Compare-and-set on
+   * `connection_status = 'connected'`, so two runs failing at the same instant
+   * produce one state change and therefore one `connection_lost` event.
    */
-  markConnectionBroken(connectionId: string, errorCode: string): Promise<void>;
+  markConnectionBroken(connectionId: string, errorCode: string): Promise<boolean>;
 
   recordEvent(input: {
     racerId: string;
@@ -165,9 +176,14 @@ export async function reconcileRacer(
   now: Date = new Date(),
 ): Promise<ReconcileOutcome> {
   let runId: string | null = null;
+  // Hoisted so the failure handler can mark the connection broken. The
+  // connection is resolved first inside the try, and everything that can fail
+  // happens after it, so by the time the catch runs this is set.
+  let connectionId: string | null = null;
 
   try {
     const connection = await store.connectionFor(racer.id);
+    connectionId = connection?.id ?? null;
     if (!connection) return { ok: false, racerId: racer.id, reason: "no_connection" };
     if (connection.status !== "connected") {
       return { ok: false, racerId: racer.id, reason: "connection_not_ready" };
@@ -293,7 +309,47 @@ export async function reconcileRacer(
     });
 
     return { ok: true, racerId: racer.id, customerCount, advanced, finished, expired };
-  } catch {
+  } catch (error) {
+    // --- The key stopped working -------------------------------------------
+    //
+    // A 401 or a permission error is not a transient fault, and retrying it is
+    // pointless: the credential is wrong, revoked, or scoped below what we need,
+    // and it will answer the same way in thirty minutes and in thirty days. So
+    // the connection is marked broken and nothing reads it again until the racer
+    // reconnects.
+    //
+    // The count is left exactly as it was. Writing it here — even to the value
+    // it already holds — would make it a number this job decided rather than the
+    // last number the provider confirmed, and the difference matters when the
+    // whole claim is that the numbers are real.
+    //
+    // No retry storm: the next run finds a connection that is not `connected`
+    // and returns before touching the provider at all.
+    const lost = isCredentialRefusal(error);
+
+    if (lost && connectionId) {
+      const broke = await store
+        .markConnectionBroken(connectionId, lost)
+        .catch(() => false);
+
+      // Only the run that performed the transition announces it. Two runs
+      // failing together produce one broken connection and one event.
+      if (broke) {
+        await store
+          .recordEvent({
+            racerId: racer.id,
+            type: "connection_lost",
+            customerCount: racer.currentCustomerCount,
+            occurredAt: now,
+          })
+          .catch(() => {
+            // The connection is already broken and the count already frozen;
+            // losing the timeline entry is worse than a retry but not worth
+            // failing the run over.
+          });
+      }
+    }
+
     // A fixed category and an id. **Never the error's text.**
     //
     // This is not defensive habit. Stripe answers a bad key with
@@ -306,20 +362,48 @@ export async function reconcileRacer(
     // The racer id is the useful part for debugging. The message never was.
     console.error("[reconcile] failed", {
       racerId: racer.id,
-      code: "provider_failed",
+      code: lost ?? "provider_failed",
     });
 
     if (runId) {
       await store
-        .finishRun(runId, { status: "failed", customerCount: null, errorCode: "provider_failed" })
+        .finishRun(runId, {
+          status: "failed",
+          customerCount: null,
+          errorCode: lost ?? "provider_failed",
+        })
         .catch(() => {
           // A failure to record a failure is not worth propagating; the next
           // poll tries again.
         });
     }
 
-    return { ok: false, racerId: racer.id, reason: "provider_failed" };
+    return {
+      ok: false,
+      racerId: racer.id,
+      reason: lost ? "connection_lost" : "provider_failed",
+    };
   }
+}
+
+/**
+ * Whether a thrown error means the credential itself was refused.
+ *
+ * Returns the category to record, or null for anything transient. Only two of
+ * the adapter's categories are permanent: `rejected` (401 — wrong, revoked, or
+ * never valid) and `insufficient_permission` (403 — valid but scoped below what
+ * we need). Both need the racer to make a new key, which is why they are
+ * separated from a network failure that just needs another poll.
+ *
+ * Matched on the class rather than on the message, because the message is
+ * exactly what must never be inspected — Stripe's own text quotes the key back.
+ */
+function isCredentialRefusal(error: unknown): "rejected" | "insufficient_permission" | null {
+  if (!(error instanceof CredentialError)) return null;
+  if (error.reason === "rejected" || error.reason === "insufficient_permission") {
+    return error.reason;
+  }
+  return null;
 }
 
 // ---------------------------------------------------------------------------

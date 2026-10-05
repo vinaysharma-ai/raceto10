@@ -1,27 +1,25 @@
-Phase 6a: expired races, and the real finish time
+Phase 6b: a refused key breaks the connection, once
 
-The window. Payments are now read only up to `ends_at`, and the read is
-skipped entirely when the window has already closed. A sale made the day
-after a race ended is not a customer of that race, and without the clamp the
-count would keep climbing after the clock stopped, letting a founder lose
-and then quietly win.
+A 401 or a 403 is not a transient fault and retrying it is pointless. The
+connection is marked broken, the count is left exactly as it was, and the
+timeline gets one connection_lost line saying why the number stopped moving.
+A frozen count with no explanation is indistinguishable from a racer who
+stopped selling.
 
-Expiry. A racing racer past `ends_at` with fewer than ten customers moves to
-`expired`, by compare-and-set on `status = 'racing'` so exactly one run
-writes it and announces it. The event is stamped with the close of the
-window rather than with the poll that noticed it.
+Frozen by writing nothing at all. Re-writing the same value would still make
+the number this job's decision rather than the last one the provider
+confirmed, and the assert is on the absence of the write for that reason.
 
-Ordering. The finish branch is checked first and the expiry branch is an
-`else if`, so a race that reached ten is a win even when the poller only
-notices afterwards. Ten customers is a win whenever it happened.
+One event, not one per run: markConnectionBroken is a compare-and-set on
+`connection_status = 'connected'`, so two runs failing together produce one
+transition and the loser announces nothing. Matching is on the error's class,
+never its message — Stripe's own text quotes the key back.
 
-finished_at. Now the tenth customer's `first_paid_at`, not the reconcile
-instant. A poll runs every thirty minutes, so "when we noticed" can be most
-of an hour after "when it happened", and a board that records real events
-cannot round that away. The `finished` event carries the same instant, so
-the timeline and the race end agree.
+No retry storm, structurally. The connection is read before the provider is
+touched, so a broken one costs a single failed call and then nothing on
+every later poll. A test asserts the provider is never contacted.
 
-Eight new tests, including one that a still-open window never expires and
-one that a payment after the close is not counted.
+A plain network failure stays `provider_failed` and is retried, which is the
+distinction that stops one bad afternoon from disconnecting everybody.
 
 Co-Authored-By: Claude Code <noreply@anthropic.com>

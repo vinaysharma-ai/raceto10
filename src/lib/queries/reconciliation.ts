@@ -279,16 +279,22 @@ export function reconciliationStore(): ReconcileStore {
       const { createAdminClient } = await import("@/lib/supabase/admin");
       const db = createAdminClient();
 
-      const { error } = await db
+      const { data, error } = await db
         .from("provider_connections")
         .update({
           connection_status: "broken",
           error_code: errorCode,
           updated_at: new Date().toISOString(),
         })
-        .eq("id", connectionId);
+        .eq("id", connectionId)
+        // Compare-and-set on the status, which is what makes the event count to
+        // one: two runs failing at the same instant both update nothing on the
+        // second pass, so only the first announces it.
+        .eq("connection_status", "connected")
+        .select("id");
 
       if (error) throw new Error(error.message);
+      return (data?.length ?? 0) > 0;
     },
 
     async recordEvent(input) {

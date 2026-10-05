@@ -47,6 +47,8 @@ function fakeStore(
     losesAdvance?: boolean;
     losesReachedTen?: boolean;
     losesExpired?: boolean;
+    /** Forces the broken-connection write to lose, as a concurrent run would. */
+    losesBroken?: boolean;
     /** First-paid instants of already-stored customers, keyed by customer id. */
     paidAt?: Record<string, Date>;
   } = {},
@@ -131,6 +133,8 @@ function fakeStore(
     },
     async markConnectionBroken(connectionId, errorCode) {
       log("markConnectionBroken", connectionId, errorCode);
+      if (options.losesBroken) return false;
+      return true;
     },
     async recordEvent(input) {
       log("recordEvent", input);
@@ -710,4 +714,137 @@ test("payments after the window closed are not counted", async () => {
     (recorded.find((r) => r.method === "recordPayments")?.args[1] as number) ?? -1,
     0,
   );
+});
+
+// ---------------------------------------------------------------------------
+// The key stops working
+// ---------------------------------------------------------------------------
+
+/**
+ * A 401 or a 403 is not a transient fault.
+ *
+ * Retrying it is pointless — the credential is wrong, revoked, or scoped below
+ * what we need, and it will answer the same way in thirty minutes and in thirty
+ * days. So the connection is marked broken, the count is left exactly as it was,
+ * and the public timeline gets one line explaining why the number stopped
+ * moving. A frozen count with no explanation is indistinguishable from a racer
+ * who stopped selling.
+ */
+for (const [label, statusCode, expected] of [
+  ["a revoked key (401)", 401, "rejected"],
+  ["a key without the needed permission (403)", 403, "insufficient_permission"],
+] as const) {
+  test(`${label} marks the connection broken and freezes the count`, async () => {
+    const { store, recorded } = fakeStore({ stored: ["cus_1", "cus_2"] });
+
+    const outcome = await reconcileRacer(
+      store,
+      adapter({
+        charges: () => {
+          throw { statusCode };
+        },
+      }),
+      racerAt(2),
+      NOW,
+    );
+
+    assert.equal(outcome.ok, false);
+    if (!outcome.ok) assert.equal(outcome.reason, "connection_lost");
+
+    const broken = recorded.find((r) => r.method === "markConnectionBroken");
+    assert.equal(broken?.args[1], expected, "the wrong category was recorded");
+
+    const event = recorded.find((r) => r.method === "recordEvent")?.args[0] as {
+      type?: string;
+      customerCount?: number;
+    };
+    assert.equal(event?.type, "connection_lost");
+    assert.equal(event?.customerCount, 2, "the event did not carry the frozen count");
+
+    // Frozen, not corrected. No count write at all is the assertion that
+    // matters: writing the same value back would still be this job deciding it.
+    assert.equal(
+      recorded.some((r) => r.method === "advance"),
+      false,
+      "the count was written during a lost connection",
+    );
+  });
+}
+
+test("a plain network failure does not break the connection", async () => {
+  // The distinction that keeps one bad afternoon from disconnecting everybody.
+  // A timeout is worth another poll; a refused key is not.
+  const { store, recorded } = fakeStore();
+
+  const outcome = await reconcileRacer(
+    store,
+    adapter({
+      charges: () => {
+        throw new Error("socket hang up");
+      },
+    }),
+    racerAt(0),
+    NOW,
+  );
+
+  assert.equal(outcome.ok, false);
+  if (!outcome.ok) assert.equal(outcome.reason, "provider_failed");
+  assert.equal(
+    recorded.some((r) => r.method === "markConnectionBroken"),
+    false,
+    "a transient failure broke the connection",
+  );
+  assert.equal(recorded.some((r) => r.method === "recordEvent"), false);
+});
+
+test("losing the broken-connection race does not emit a second event", async () => {
+  // Two runs fail at the same instant. One performs the transition and
+  // announces it; the other writes nothing and says nothing.
+  const { store, recorded } = fakeStore({ losesBroken: true });
+
+  const outcome = await reconcileRacer(
+    store,
+    adapter({
+      charges: () => {
+        throw { statusCode: 401 };
+      },
+    }),
+    racerAt(0),
+    NOW,
+  );
+
+  assert.equal(outcome.ok, false);
+  if (!outcome.ok) assert.equal(outcome.reason, "connection_lost");
+  assert.equal(
+    recorded.some((r) => r.method === "recordEvent"),
+    false,
+    "the loser announced a connection_lost event",
+  );
+});
+
+test("a broken connection is never read again, so there is no retry storm", async () => {
+  // The property that makes this safe to leave on a thirty minute schedule. The
+  // connection is checked before the provider is touched, so a dead key costs
+  // one failed call and then nothing at all.
+  const { store, recorded } = fakeStore({
+    connection: { id: CONNECTION_ID, status: "broken", accountId: ACCOUNT },
+  });
+
+  let contacted = false;
+  const outcome = await reconcileRacer(
+    store,
+    adapter({
+      charges: () => {
+        contacted = true;
+        return (async function* () {})();
+      },
+    }),
+    racerAt(0),
+    NOW,
+  );
+
+  assert.equal(outcome.ok, false);
+  if (!outcome.ok) assert.equal(outcome.reason, "connection_not_ready");
+  assert.equal(contacted, false, "the provider was called for a broken connection");
+  assert.equal(recorded.some((r) => r.method === "beginRun"), false);
 });
