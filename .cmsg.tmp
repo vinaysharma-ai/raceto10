@@ -1,25 +1,21 @@
-Phase 6b: a refused key breaks the connection, once
+Phase 6c: the key does not outlive the race
 
-A 401 or a 403 is not a transient fault and retrying it is pointless. The
-connection is marked broken, the count is left exactly as it was, and the
-timeline gets one connection_lost line saying why the number stopped moving.
-A frozen count with no explanation is indistinguishable from a racer who
-stopped selling.
+Deleted on finished, on expired, and when the connection breaks for good.
+ineligible and disconnected were already covered next to the code that
+performs them, so all five terminal states now have a test.
 
-Frozen by writing nothing at all. Re-writing the same value would still make
-the number this job's decision rather than the last one the provider
-confirmed, and the assert is on the absence of the write for that reason.
+The broken case deletes inside the compare-and-set guard rather than outside
+it. The run that lost the race is looking at a connection another run is
+already handling, and deleting a credential it did not break could race a
+racer's reconnect.
 
-One event, not one per run: markConnectionBroken is a compare-and-set on
-`connection_status = 'connected'`, so two runs failing together produce one
-transition and the loser announces nothing. Matching is on the error's class,
-never its message — Stripe's own text quotes the key back.
+The test that matters most is the negative one: a racing racer's key is not
+deleted. Deleting there leaves a race running with no way to count it, and
+the board would show a frozen number for a race that has not ended — which
+looks exactly like a racer who stopped selling. A transient network failure
+also deletes nothing; only a refusal does.
 
-No retry storm, structurally. The connection is read before the provider is
-touched, so a broken one costs a single failed call and then nothing on
-every later poll. A test asserts the provider is never contacted.
-
-A plain network failure stays `provider_failed` and is retried, which is the
-distinction that stops one bad afternoon from disconnecting everybody.
+/privacy says the key "is deleted when your race ends". It is now true of
+every way a race can end.
 
 Co-Authored-By: Claude Code <noreply@anthropic.com>

@@ -149,6 +149,16 @@ export type ReconcileStore = {
    */
   markConnectionBroken(connectionId: string, errorCode: string): Promise<boolean>;
 
+  /**
+   * Deletes the sealed credential behind a racer's connection.
+   *
+   * Called on every terminal state, and the reason it is on this interface
+   * rather than left to each branch is that /privacy makes a promise about it:
+   * "It is deleted when your race ends". A promise kept at five call sites by
+   * five different people is a promise that will eventually be kept at four.
+   */
+  deleteCredential(racerId: string): Promise<void>;
+
   recordEvent(input: {
     racerId: string;
     type: "customer_milestone" | "finished" | "expired" | "connection_lost";
@@ -284,6 +294,10 @@ export async function reconcileRacer(
           // rather than differing by however long the poll interval was.
           occurredAt: tenthPaidAt,
         });
+
+        // The race is over. There is nothing left to read, and /privacy says the
+        // key is deleted when the race ends.
+        await store.deleteCredential(racer.id);
       }
     } else if (now.getTime() > racer.endsAt.getTime()) {
       // The window closed short of ten. Compare-and-set, so exactly one run
@@ -299,6 +313,10 @@ export async function reconcileRacer(
           // The close of the window, not the moment we noticed it had closed.
           occurredAt: racer.endsAt,
         });
+
+        // Same promise, and the same answer: there will never be another read
+        // of this account for this race.
+        await store.deleteCredential(racer.id);
       }
     }
 
@@ -347,6 +365,21 @@ export async function reconcileRacer(
             // losing the timeline entry is worse than a retry but not worth
             // failing the run over.
           });
+
+        // The key has been refused by Stripe. Holding it would be holding a
+        // credential we know does not work, for an account we can no longer
+        // read — which is the one thing the vault exists to avoid. The racer
+        // reconnects with a new one; nothing is lost that was working.
+        //
+        // Deliberately inside the `broke` guard rather than outside it: the run
+        // that lost the compare-and-set is looking at a connection another run
+        // is already handling, and deleting a credential it did not break could
+        // race a racer's reconnect.
+        await store.deleteCredential(racer.id).catch(() => {
+          // Reported by the run's own failure above. A key that outlives its
+          // connection is recoverable — it is unreachable and will be replaced —
+          // where failing the whole reconcile is not.
+        });
       }
     }
 

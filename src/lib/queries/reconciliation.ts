@@ -297,6 +297,40 @@ export function reconciliationStore(): ReconcileStore {
       return (data?.length ?? 0) > 0;
     },
 
+    /**
+     * Deletes the sealed key behind a racer's connection.
+     *
+     * Resolves the connection first, because the vault is keyed on the
+     * connection's id rather than on the racer. A racer with no connection has
+     * nothing to delete and no error to report — the promise is that no key is
+     * held, and none is.
+     *
+     * Throwing on a real failure is deliberate. The caller decides whether a
+     * failed deletion is worth failing the run over, and on the finished and
+     * expired paths it is not — but silence here would leave a live credential
+     * for a race that is over, which is the one outcome this exists to prevent.
+     */
+    async deleteCredential(racerId) {
+      const { createAdminClient } = await import("@/lib/supabase/admin");
+      const db = createAdminClient();
+
+      const { data: connection, error: readError } = await db
+        .from("provider_connections")
+        .select("id")
+        .eq("racer_id", racerId)
+        .maybeSingle();
+
+      if (readError) throw new Error(readError.message);
+      if (!connection) return;
+
+      const { error } = await db
+        .from("provider_credentials")
+        .delete()
+        .eq("provider_connection_id", connection.id);
+
+      if (error) throw new Error(error.message);
+    },
+
     async recordEvent(input) {
       const { createAdminClient } = await import("@/lib/supabase/admin");
       const db = createAdminClient();

@@ -136,6 +136,9 @@ function fakeStore(
       if (options.losesBroken) return false;
       return true;
     },
+    async deleteCredential(racerId) {
+      log("deleteCredential", racerId);
+    },
     async recordEvent(input) {
       log("recordEvent", input);
     },
@@ -847,4 +850,117 @@ test("a broken connection is never read again, so there is no retry storm", asyn
   if (!outcome.ok) assert.equal(outcome.reason, "connection_not_ready");
   assert.equal(contacted, false, "the provider was called for a broken connection");
   assert.equal(recorded.some((r) => r.method === "beginRun"), false);
+});
+
+// ---------------------------------------------------------------------------
+// The key does not outlive the race
+// ---------------------------------------------------------------------------
+
+/**
+ * /privacy says the key "is deleted when your race ends".
+ *
+ * One test per terminal state, because the promise is kept by five separate
+ * branches and the whole risk is that four of them are correct. `ineligible` and
+ * `disconnected` live in their own files, next to the code that performs them.
+ *
+ * The negative case is the one that would be catastrophic to get wrong: deleting
+ * a racing racer's key leaves a race that can never be counted, and it would
+ * look exactly like a racer who stopped selling.
+ */
+test("the key is deleted when a race finishes", async () => {
+  const stored = Array.from({ length: 9 }, (_, i) => `cus_${i}`);
+  const { store, recorded } = fakeStore({ stored });
+
+  const outcome = await reconcileRacer(
+    store,
+    chargingPort([charge("ch_10", "cus_10")]),
+    racerAt(9),
+    NOW,
+  );
+
+  assert.equal(outcome.ok, true);
+  if (outcome.ok) assert.equal(outcome.finished, true);
+  assert.equal(
+    recorded.some((r) => r.method === "deleteCredential"),
+    true,
+    "the key outlived the race",
+  );
+});
+
+test("the key is deleted when a race expires", async () => {
+  const { store, recorded } = fakeStore();
+
+  const outcome = await reconcileRacer(store, adapter(), closedRacer(3), NOW);
+
+  assert.equal(outcome.ok, true);
+  if (outcome.ok) assert.equal(outcome.expired, true);
+  assert.equal(
+    recorded.some((r) => r.method === "deleteCredential"),
+    true,
+    "the key outlived an expired race",
+  );
+});
+
+test("the key is deleted when the connection breaks for good", async () => {
+  const { store, recorded } = fakeStore();
+
+  await reconcileRacer(
+    store,
+    adapter({
+      charges: () => {
+        throw { statusCode: 401 };
+      },
+    }),
+    racerAt(0),
+    NOW,
+  );
+
+  assert.equal(
+    recorded.some((r) => r.method === "deleteCredential"),
+    true,
+    "a refused key was kept",
+  );
+});
+
+test("a racing racer's key is NOT deleted", async () => {
+  // The direction that matters most. Deleting here leaves a race running with no
+  // way to count it, and the board would show a number frozen at whatever it
+  // happened to be, for a race that has not ended.
+  const { store, recorded } = fakeStore({ stored: ["cus_1"] });
+
+  const outcome = await reconcileRacer(
+    store,
+    chargingPort([charge("ch_2", "cus_2")]),
+    racerAt(1),
+    NOW,
+  );
+
+  assert.equal(outcome.ok, true);
+  if (outcome.ok) {
+    assert.equal(outcome.finished, false);
+    assert.equal(outcome.expired, false);
+  }
+  assert.equal(
+    recorded.some((r) => r.method === "deleteCredential"),
+    false,
+    "the key was deleted while the race was still running",
+  );
+});
+
+test("a run that only fails transiently deletes nothing", async () => {
+  // A network failure must not cost the racer their key. Only a refusal does.
+  const { store, recorded } = fakeStore();
+
+  await reconcileRacer(
+    store,
+    adapter({
+      charges: () => {
+        throw new Error("socket hang up");
+      },
+    }),
+    racerAt(0),
+    NOW,
+  );
+
+  assert.equal(recorded.some((r) => r.method === "deleteCredential"), false);
 });
