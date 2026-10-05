@@ -6,9 +6,11 @@
 # This is that second option. `pg_cron` and `pg_net` are both *available* on the
 # project but not installed, so enabling them needs a migration — and a
 # migration needs approval. This workflow needs neither, so the stage is
-# complete now rather than blocked. `supabase/migrations/20260930120000_*`
-# carries the preferred path, prepared and unpushed, for whenever that is
-# approved.
+# complete now rather than blocked.
+# `supabase/pending/20260930120000_reconcile_schedule.sql` carries the preferred
+# path. It sits outside `supabase/migrations` on purpose: `db push` cannot select
+# migrations, so leaving it there would have pushed it alongside unrelated ones,
+# and running both schedulers would double every poll.
 #
 # ## What it does, and what it deliberately does not
 #

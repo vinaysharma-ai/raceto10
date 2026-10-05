@@ -9,7 +9,9 @@
     "lint": "eslint",
     "test": "node --test \"src/**/*.test.ts\"",
     "reconcile": "node scripts/call-cron.mjs /api/cron/reconcile",
-    "activate": "node scripts/call-cron.mjs /api/admin/activate-ready"
+    "activate": "node scripts/call-cron.mjs /api/admin/activate-ready",
+    "fixture:cleanup": "node scripts/fixture-cleanup.mjs",
+    "check:public": "node scripts/check-public.mjs"
   },
   "dependencies": {
     "@supabase/ssr": "^0.12.7",

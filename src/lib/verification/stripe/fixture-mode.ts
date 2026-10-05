@@ -33,8 +33,31 @@
 export const FIXTURE_KEY_EMPTY = "rk_test_" + "fixture_empty";
 export const FIXTURE_KEY_USED = "rk_test_" + "fixture_used";
 
-/** Both fixture keys report this account id. Not a real Stripe id. */
+/**
+ * Both fixture keys report this account id. Not a real Stripe id.
+ *
+ * ## Why this is the identity of a fixture racer
+ *
+ * Local development and production share one hosted database, so a fixture race
+ * would appear on the live public board. Nothing about that is acceptable, and
+ * the fix is not a flag on the row — it is making a fixture racer recognizable
+ * from data that already exists.
+ *
+ * `provider_connections.external_account_ref` holds the account a key belongs
+ * to. A real one is `acct_` followed by Stripe's own random suffix; this one is
+ * the literal string below. So `external_account_ref like 'acct_fixture%'` names
+ * exactly the racers created through the fixture path, with no schema change and
+ * no flag anybody can forget to set.
+ */
 export const FIXTURE_ACCOUNT_ID = "acct_fixture0000000000";
+
+/**
+ * The pattern that identifies a fixture racer's connection.
+ *
+ * Shared by the cleanup script so the thing that creates them and the thing that
+ * removes them cannot disagree about what one is.
+ */
+export const FIXTURE_ACCOUNT_PREFIX = "acct_fixture";
 
 export function fixtureMode(): boolean {
   return process.env.NODE_ENV !== "production" && process.env.STRIPE_FIXTURE_MODE === "true";
