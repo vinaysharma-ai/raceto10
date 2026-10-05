@@ -34,7 +34,7 @@ export const dynamic = "force-dynamic";
 
 function backToJoin(request: NextRequest, reason: string) {
   const url = new URL("/join", request.nextUrl.origin);
-  url.searchParams.set("problem", reason);
+  url.searchParams.set("error", reason);
   return NextResponse.redirect(url);
 }
 
@@ -42,16 +42,18 @@ export async function GET(request: NextRequest) {
   const params = request.nextUrl.searchParams;
 
   // The provider reports a refusal here — a founder clicking "cancel" on the
-  // consent screen. A decision, not a failure.
+  // consent screen. A decision, not a failure, and it gets its own sentence
+  // because "you cancelled" and "it did not work" call for different next
+  // steps: one is fine to walk away from, the other is worth retrying.
   if (params.get("error")) {
     return backToJoin(
       request,
-      params.get("error") === "access_denied" ? "declined" : "provider",
+      params.get("error") === "access_denied" ? "declined" : "signin_failed",
     );
   }
 
   const code = params.get("code");
-  if (!code) return backToJoin(request, "no-code");
+  if (!code) return backToJoin(request, "signin_failed");
 
   const next = safeRedirectPath(params.get("next"));
 
@@ -62,7 +64,7 @@ export async function GET(request: NextRequest) {
     const { error } = await supabase.auth.exchangeCodeForSession(code);
     if (error) {
       console.error("[auth] code exchange failed", error.message);
-      return backToJoin(request, "provider");
+      return backToJoin(request, "signin_failed");
     }
 
     // Re-validated against the auth server, not read from the cookie. This id
@@ -72,14 +74,14 @@ export async function GET(request: NextRequest) {
       data: { user },
     } = await supabase.auth.getUser();
 
-    if (!user) return backToJoin(request, "provider");
+    if (!user) return backToJoin(request, "signin_failed");
 
     const ensured = await ensureProfile(user);
-    if (!ensured.ok) return backToJoin(request, "profile");
+    if (!ensured.ok) return backToJoin(request, "signin_failed");
 
     return NextResponse.redirect(new URL(next, request.nextUrl.origin));
   } catch (error) {
     console.error("[auth] callback failed", error);
-    return backToJoin(request, "provider");
+    return backToJoin(request, "signin_failed");
   }
 }

@@ -57,28 +57,28 @@ export async function getJoinState(): Promise<JoinView> {
 
   if (!profile) return { state: { stage: "signed-out" }, durationDays };
 
-  // An incomplete profile has no racer row — the racer is created at activation
-  // — so there is nothing further to read and no point trying.
-  if (!profile.x_handle || !profile.email) {
-    return { state: { stage: "profile-incomplete", profile }, durationDays };
-  }
-
   const { createAdminClient } = await import("@/lib/supabase/admin");
   const db = createAdminClient();
 
   const { data: racer } = await db
     .from("racer")
     .select(
-      "id, status, activated_at, race_end_at, baseline_customer_count, current_customer_count, count_reconciled_at",
+      "id, status, product_name, activated_at, race_end_at, baseline_customer_count, current_customer_count, count_reconciled_at",
     )
     .eq("profile_id", profile.id)
     .maybeSingle();
 
-  // A racer row is created at activation, so a founder who has never started
-  // has none — and with no racer there is nothing to connect and no verdict to
-  // look for. Returned here rather than below so the rest of this function has
-  // a non-null racer to work with.
-  if (!racer) return { state: { stage: "no-connection", profile }, durationDays };
+  // The racer row is the record that the profile step was finished — it is
+  // created by that step, carrying the product name and the consent. So its
+  // absence *is* the "we still need your details" state, and an email or handle
+  // being missing is not a second way to be incomplete.
+  //
+  // This used to test `profile.x_handle`, which made an X handle mandatory and
+  // left Google-only founders unable to proceed at all. The handle is now
+  // optional by design.
+  if (!racer || !racer.product_name) {
+    return { state: { stage: "profile-incomplete", profile }, durationDays };
+  }
 
   // The connection is keyed by `racer_id`, not by profile, so it can only be
   // read once the racer row is known.

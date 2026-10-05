@@ -1,3 +1,30 @@
+-- FALLBACK, NOT A MIGRATION. Do not move this back into `supabase/migrations`.
+--
+-- `supabase db push` reads `supabase/migrations` and nothing else, so this file
+-- sits outside it on purpose. It is kept rather than deleted because it is the
+-- documented alternative if GitHub Actions ever stops being an option.
+--
+-- ## Why it is not applied
+--
+-- The GitHub Actions workflow in `.github/workflows/reconcile.yml` is the
+-- scheduler. It runs the same `*/30 * * * *`, needs no extension, needs no Vault
+-- secret, and is already live. Applying this as well would not make the counts
+-- wrong — reconciliation is idempotent by design, which is the property the
+-- whole design rests on — but it would double the reads against every racer's
+-- Stripe account every half hour, for no benefit.
+--
+-- It also fails the additive-only rule this repository holds migrations to: it
+-- installs two extensions, creates a `security definer` function, revokes
+-- privileges, and schedules a recurring job.
+--
+-- ## To use it instead of GitHub Actions
+--
+-- Move this file back into `supabase/migrations`, store the two Vault secrets
+-- (`reconcile_app_url`, `reconcile_cron_secret`), disable the GitHub workflow,
+-- then push. Doing one without the other is the double-polling case above.
+--
+-- ---------------------------------------------------------------------------
+--
 -- raceto10 — the reconciliation poll, on Supabase's own scheduler.
 --
 -- `02` §237: "Preferred: Supabase `pg_cron` + `pg_net` if available."

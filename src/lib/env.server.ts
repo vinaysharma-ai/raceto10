@@ -59,6 +59,24 @@ function lazily<T>(
 }
 
 /** Service-role access. Bypasses RLS entirely — server use only. */
+/**
+ * Whether a racer may start their own clock.
+ *
+ * Default false, and the default is the product decision rather than a
+ * placeholder: activation is a batch the owner runs deliberately, so the moment
+ * a race begins is one instant the owner chose, not whenever the first founder
+ * happened to press a button. The flag exists so that can be relaxed without a
+ * deploy.
+ *
+ * Read as a strict string comparison because every environment variable is a
+ * string. `"TRUE"`, `"1"` and `"yes"` are not accepted — a value that is almost
+ * right is a value somebody typed by accident, and the failure mode of guessing
+ * wrong here is a race starting early.
+ */
+export function allowSelfStart(): boolean {
+  return process.env.ALLOW_SELF_START === "true";
+}
+
 export const supabaseServiceEnv = lazily(
   "Supabase service-role",
   ["SUPABASE_SECRET_KEY"],

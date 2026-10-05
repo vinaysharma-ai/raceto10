@@ -33,7 +33,12 @@ import { CredentialError, type CredentialFailure } from "./stripe/restricted.ts"
  * key we tried" is the tempting thing to record.
  */
 
-export type ConnectFailure = CredentialFailure | "account_in_use" | "no_racer" | "storage_error";
+export type ConnectFailure =
+  | CredentialFailure
+  | "account_in_use"
+  | "no_racer"
+  | "test_key_in_production"
+  | "storage_error";
 
 /**
  * The entry-gate verdict, as of this check.
@@ -133,6 +138,23 @@ export type ConnectionStore = {
     source: "registration";
     errorCode: string | null;
   }): Promise<void>;
+
+  /**
+   * Moves a registered racer to `ready`.
+   *
+   * ## Why it lives here
+   *
+   * `ready` means one thing: verified eligible with a working connection. That
+   * is exactly the state this function has just established, so it is the only
+   * place the transition can be made without recomputing the verdict.
+   *
+   * The implementation must be conditional on the current status — a reconnect
+   * by a racer whose clock is already running must not pull them back to
+   * `ready`. Activation's precondition is `status = 'ready'`, so a wrong write
+   * here would either reopen a finished race or lock a founder out of starting
+   * one.
+   */
+  markReady(racerId: string): Promise<void>;
 };
 
 // ---------------------------------------------------------------------------
@@ -159,6 +181,8 @@ export function describeConnectFailure(reason: ConnectFailure): string {
       return "We couldn't reach Stripe just now. Nothing was saved. Try again in a moment.";
     case "no_racer":
       return "Finish setting up your profile before connecting a payment provider.";
+    case "test_key_in_production":
+      return "That is a test-mode key. This site verifies live accounts only, because a test account can be filled with customers that were never really paid for.";
     case "storage_error":
       return "We couldn't save that just now. Try again in a moment.";
   }
@@ -245,7 +269,15 @@ async function evaluateEligibility(
       : (facts.mrrUnavailable ?? null),
   });
 
-  if (verdict.eligible) return { status: "eligible" };
+  if (verdict.eligible) {
+    // Deliberately not wrapped: if the status write fails, the connection is
+    // live but the racer cannot ever be activated, and returning "eligible"
+    // would show them a start button that refuses. Letting it throw turns into
+    // an honest "try again in a moment" one step up, which is a retry that
+    // works.
+    await store.markReady(racerId);
+    return { status: "eligible" };
+  }
 
   // `mrr_unknown` is not a refusal about the racer's business — it is us being
   // unable to see. Reported as unknown so the copy can say what to fix on the
@@ -297,6 +329,22 @@ export async function connectProviderAccount(
 ): Promise<ConnectOutcome> {
   const racerId = await store.currentRacerId();
   if (!racerId) return refusal("no_racer");
+
+  // --- 0. A test key is refused in production ------------------------------
+  //
+  // Test mode is a sandbox: its customers and charges are whatever the account
+  // holder typed in. A racer could reach ten in an afternoon having taken no
+  // money, and the board would show it as real. So live mode only.
+  //
+  // Outside production the test keys are accepted, because that is the only way
+  // to work on this without a live account — and the fixture keys, which are
+  // also `rk_test_`, are refused here too whenever NODE_ENV is production.
+  //
+  // Checked before the provider is called, so a refused key never leaves the
+  // process.
+  if (process.env.NODE_ENV === "production" && apiKey.startsWith("rk_test_")) {
+    return refusal("test_key_in_production");
+  }
 
   // --- 1. Validate, before anything is written -----------------------------
   let resolved: ProviderConnection;

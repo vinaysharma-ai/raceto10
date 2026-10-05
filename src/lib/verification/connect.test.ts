@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 
-import { FAKE_RESTRICTED_LIVE_KEY } from "./test-fixtures.ts";
+import { FAKE_RESTRICTED_LIVE_KEY, FAKE_RESTRICTED_TEST_KEY } from "./test-fixtures.ts";
 
 import {
   connectProviderAccount,
@@ -70,6 +70,9 @@ function fakeStore(
     },
     async insertSnapshot(row) {
       log("insertSnapshot", row);
+    },
+    async markReady(racerId) {
+      log("markReady", racerId);
     },
     seal(plaintext, connectionId) {
       log("seal", plaintext, connectionId);
@@ -614,4 +617,82 @@ test("a CredentialError from the adapter keeps its category", async () => {
 
   assert.equal(outcome.ok, false);
   if (!outcome.ok) assert.equal(outcome.reason, "insufficient_permission");
+});
+
+// ---------------------------------------------------------------------------
+// Live mode only
+// ---------------------------------------------------------------------------
+
+/**
+ * A test-mode key is refused in production.
+ *
+ * Test mode is a sandbox whose customers are whatever the account holder typed
+ * in, so a racer could reach ten without anybody paying. Accepting one in
+ * production would make the board's central claim false, which is why this is
+ * checked before the provider is contacted rather than after.
+ */
+test("a test-mode key is refused in production, without calling the provider", async () => {
+  const before = process.env.NODE_ENV;
+  const env = process.env as Record<string, string | undefined>;
+  env.NODE_ENV = "production";
+
+  try {
+    const { store, recorded } = fakeStore();
+    let contacted = false;
+
+    const outcome = await connectProviderAccount(
+      store,
+      adapter({
+        account: async () => {
+          contacted = true;
+          return { id: ACCOUNT, label: "Ledgerly", canWrite: false };
+        },
+      }),
+      FAKE_RESTRICTED_TEST_KEY,
+    );
+
+    assert.equal(outcome.ok, false);
+    if (!outcome.ok) assert.equal(outcome.reason, "test_key_in_production");
+    assert.equal(contacted, false, "the provider was contacted with a refused key");
+    assert.equal(
+      recorded.some((r) => r.method === "insertConnection"),
+      false,
+      "a refused key left a connection row behind",
+    );
+  } finally {
+    if (before === undefined) delete env.NODE_ENV;
+    else env.NODE_ENV = before;
+  }
+});
+
+test("a live key still connects in production", async () => {
+  const before = process.env.NODE_ENV;
+  const env = process.env as Record<string, string | undefined>;
+  env.NODE_ENV = "production";
+
+  try {
+    const { store } = fakeStore();
+    const outcome = await connectProviderAccount(store, adapter(), KEY);
+
+    assert.equal(outcome.ok, true, "the rule refused a live key too");
+  } finally {
+    if (before === undefined) delete env.NODE_ENV;
+    else env.NODE_ENV = before;
+  }
+});
+
+test("outside production a test key is accepted, which is how this is worked on", async () => {
+  const before = process.env.NODE_ENV;
+  const env = process.env as Record<string, string | undefined>;
+  env.NODE_ENV = "development";
+
+  try {
+    const { store } = fakeStore();
+    const outcome = await connectProviderAccount(store, adapter(), FAKE_RESTRICTED_TEST_KEY);
+
+    assert.equal(outcome.ok, true);
+  } finally {
+    if (before === undefined) delete env.NODE_ENV;
+    else env.NODE_ENV = before;
+  }
 });

@@ -18,7 +18,15 @@ import { env } from "@/lib/env";
  * back — the two checks are independent on purpose.
  */
 
-export type SignInProvider = "google" | "twitter";
+/**
+ * Supabase's provider id for X is `x`.
+ *
+ * It was `twitter` — the legacy OAuth 1.0a provider — and that id is what made
+ * every attempt to sign in with X land on `Unsupported provider: provider is not
+ * enabled`. The OAuth 2.0 provider the dashboard exposes is a different one, and
+ * this is its id.
+ */
+export type SignInProvider = "google" | "x";
 
 const CALLBACK_PATH = "/auth/callback";
 
@@ -61,7 +69,7 @@ export async function signIn(provider: SignInProvider, next = "/join"): Promise<
       // Most often: the identity is already linked, or manual linking is off.
       // Either way the founder is told rather than left on an unchanged page.
       console.error("[auth] linking a provider failed", error.message);
-      redirect("/join?problem=link");
+      redirect("/join?error=link_failed");
     }
     if (data?.url) redirect(data.url);
     redirect("/join");
@@ -73,8 +81,12 @@ export async function signIn(provider: SignInProvider, next = "/join"): Promise<
   });
 
   if (error || !data.url) {
+    // The provider being switched off in the dashboard lands here too. The
+    // join page already renders the buttons from the project's own settings, so
+    // this is the case where that read was stale or unavailable — and it is
+    // still a sentence rather than a JSON body.
     console.error("[auth] sign-in could not start", error?.message);
-    redirect("/join?problem=provider");
+    redirect("/join?error=signin_failed");
   }
 
   // Last statement, outside any `try`. `redirect()` works by throwing, so a

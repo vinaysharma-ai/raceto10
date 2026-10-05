@@ -10,6 +10,8 @@ import { StripeConnectForm } from "@/components/join/stripe-connect-form";
 import { Footer } from "@/components/landing/footer";
 import { Nav } from "@/components/landing/nav";
 import { Button } from "@/components/ui/button";
+import { enabledProviders } from "@/lib/auth/providers";
+import { allowSelfStart } from "@/lib/env.server";
 import { getJoinState } from "@/lib/queries/join-state";
 import { describeDuration } from "@/lib/race/config";
 import { describeIneligibility } from "@/lib/verification/eligibility.ts";
@@ -23,36 +25,35 @@ import { describeIneligibility } from "@/lib/verification/eligibility.ts";
  * renderer: one exhaustive switch, no branching on partial state. That is
  * deliberate. The stages are mutually exclusive, and a page that assembled
  * itself from three independent reads could show a combination that is not
- * real — "eligible" beside no connection.
+ * real: "eligible" beside no connection.
+ *
+ * Because every stage is derived from the database rather than from a wizard's
+ * position, a refresh mid-way, a back button, or a second tab all land on the
+ * truth. There is no step to lose.
  *
  * ## Why the body streams
  *
- * `getJoinState` reads the session, the profile, the connection and the race,
- * and none of that is needed to paint the page. Held in the page itself, every
- * one of those reads would sit in front of the first byte. Behind a `Suspense`
+ * `getJoinState` reads the session, the profile, the racer, the connection and
+ * the race, and none of that is needed to paint the page. Behind a `Suspense`
  * boundary the header, the heading and the footer are on screen immediately and
  * only the stage waits, which is the part that genuinely cannot be known
  * earlier.
  *
- * The fallback is honest about being a fallback. It shows the page's real
- * heading and says it is checking, rather than a grey box that could mean
- * anything.
+ * ## The states a founder can be in
  *
- * ## The states a founder can be in, and why each looks different
+ *   * **signed out** — the eligibility rule, and the two ways in.
+ *   * **needs profile** — no racer row yet. Product name, display name, email
+ *     and the consent.
+ *   * **needs provider** — registered, no working Stripe connection.
+ *   * **verifying** — we could not read the account. Distinct from ineligible,
+ *     because the fix is different.
+ *   * **ineligible** — the account has customers or revenue.
+ *   * **ready** — eligible, clock not started.
+ *   * **racing** — the clock is running, shown with the window and the count.
  *
- *   * **registered** — signed in, profile incomplete. Asked for the fields the
- *     provider did not supply, and nothing else.
- *   * **ready** — connected and verified at 0/$0. Shown the start control.
- *   * **racing** — the clock is running. Shown the window, the baseline and a
- *     link to the public board.
- *   * **ineligible** — the account has customers or revenue. Told which, and
- *     that it is a refusal rather than a failure.
- *   * **verification failure** — we could not read the account. Told that, and
- *     offered the fix, which is different from ineligible's.
- *
- * Distinguishing the last two matters more than it looks: telling someone with
- * a dead credential that they "already have customers" sends them to Stripe to
- * fix a business fact that is not wrong.
+ * Telling the last two apart from ineligible matters more than it looks: telling
+ * someone with a dead credential that they "already have customers" sends them
+ * to Stripe to fix a business fact that is not wrong.
  */
 
 export const metadata: Metadata = {
@@ -63,16 +64,18 @@ export const metadata: Metadata = {
 /**
  * Reasons the callback can bounce someone back here.
  *
- * Mapped through a fixed list rather than rendered from the query string: the
- * parameter is user-controlled, and echoing it would let anyone put arbitrary
- * copy on this page by editing a URL.
+ * A fixed list rather than the query string rendered back: the parameter is
+ * user-controlled, and echoing it would let anyone put arbitrary copy on this
+ * page by editing a URL.
+ *
+ * `signin_failed` is the catch-all and the one the callback uses for every
+ * failure to establish a session — a refused code, an expired one, a profile
+ * that could not be created. It says nothing was saved because nothing was.
  */
 const PROBLEMS: Record<string, string> = {
+  signin_failed: "Sign-in didn't complete. Nothing was saved. Try again.",
   declined: "You cancelled at the sign-in screen. Nothing was shared.",
-  provider: "That sign-in didn't complete. Nothing was shared. Try again.",
-  "no-code": "That sign-in link was incomplete. Try again from the start.",
-  profile: "We couldn't finish setting up your account. Try again in a moment.",
-  link: "That account couldn't be linked. It may already be connected.",
+  link_failed: "That account couldn't be linked. It may already be connected.",
 };
 
 /** Rendered on the server, so the format is fixed rather than locale-dependent. */
@@ -113,12 +116,12 @@ function JoinFallback() {
 export default async function JoinPage({
   searchParams,
 }: {
-  searchParams: Promise<{ problem?: string }>;
+  searchParams: Promise<{ error?: string }>;
 }) {
   // Reading the query string is not slow data, so it stays in the shell: the
   // message a failed sign-in carries has to be in the first paint, not streamed
   // in after it.
-  const { problem } = await searchParams;
+  const { error } = await searchParams;
 
   return (
     <>
@@ -126,7 +129,7 @@ export default async function JoinPage({
 
       <main className="mx-auto w-full max-w-xl flex-1 px-6 py-12">
         <Suspense fallback={<JoinFallback />}>
-          <JoinStage problem={problem} />
+          <JoinStage error={error} />
         </Suspense>
       </main>
 
@@ -135,15 +138,18 @@ export default async function JoinPage({
   );
 }
 
-async function JoinStage({ problem }: { problem?: string }) {
-  const { state, durationDays } = await getJoinState();
+async function JoinStage({ error }: { error?: string }) {
+  const [{ state, durationDays }, available] = await Promise.all([
+    getJoinState(),
+    enabledProviders(),
+  ]);
 
   // Phrased through the one helper, so "7" never reaches the page as a bare
   // number. `duration` is a count of days, not a sentence.
   const duration = describeDuration(durationDays);
 
   // Only a known reason renders. An unknown one is ignored rather than shown.
-  const message = problem ? PROBLEMS[problem] : undefined;
+  const message = error ? PROBLEMS[error] : undefined;
 
   const now = new Date();
 
@@ -175,23 +181,15 @@ async function JoinStage({ problem }: { problem?: string }) {
       ) : null}
 
       <div className="mt-8">
-        {state.stage === "signed-out" ? <SignInButtons next="/join" /> : null}
+        {state.stage === "signed-out" ? (
+          <SignInButtons next="/join" available={available} />
+        ) : null}
 
         {state.stage === "profile-incomplete" ? (
           <ProfileForm profile={state.profile} />
         ) : null}
 
-        {state.stage === "no-connection" ? (
-          <>
-            <p className="mb-6 text-small text-text-muted prose">
-              Signed in as{" "}
-              <span className="text-text">@{state.profile.x_handle}</span>. One
-              step left: connect the account we verify your customer count
-              from.
-            </p>
-            <StripeConnectForm />
-          </>
-        ) : null}
+        {state.stage === "no-connection" ? <StripeConnectForm /> : null}
 
         {state.stage === "connection-unhealthy" ? (
           <>
@@ -230,13 +228,33 @@ async function JoinStage({ problem }: { problem?: string }) {
             <p className="mt-2 text-small text-text prose">
               {describeIneligibility(state.reason)}
             </p>
-            <p className="mt-3 text-small text-text-muted prose">
-              Your clock has not started and nothing was changed.
-            </p>
           </div>
         ) : null}
 
-        {state.stage === "eligible" ? <ActivateForm durationLabel={duration} /> : null}
+        {state.stage === "eligible" ? (
+          <div className="rounded-card border border-border bg-surface p-6">
+            <h2 className="text-medium">You&apos;re in. Your clock hasn&apos;t started yet.</h2>
+
+            <ul className="mt-4 flex flex-col gap-2 text-small text-text-muted prose">
+              <li>You are eligible and registered.</li>
+              <li>
+                Your clock and your baseline start when your race is activated
+                {duration ? `, and it then runs for ${duration}` : ""}.
+              </li>
+              <li>You can join while other races are already running.</li>
+            </ul>
+
+            {/* The start control is rendered only when the owner has turned
+                self-start on. Activation is a batch the owner runs, so the
+                moment a race begins is one instant they chose rather than
+                whenever a founder happened to press a button. */}
+            {allowSelfStart() ? (
+              <div className="mt-6">
+                <ActivateForm durationLabel={duration} />
+              </div>
+            ) : null}
+          </div>
+        ) : null}
 
         {(state.stage === "racing" || state.stage === "finished") && (
           <div className="rounded-card border border-border bg-surface p-6">
@@ -324,7 +342,7 @@ async function JoinStage({ problem }: { problem?: string }) {
       {state.stage === "signed-out" ? null : (
         <div className="mt-6 flex items-center justify-between gap-4">
           {/* Every stage past `signed-out` carries a profile, and the handle
-              is only absent while the founder is still supplying it. */}
+              is only absent for a founder who signed in with Google. */}
           <p className="text-small text-text-muted">
             {state.profile.x_handle ? `Signed in as @${state.profile.x_handle}` : "Signed in"}
           </p>
@@ -335,19 +353,6 @@ async function JoinStage({ problem }: { problem?: string }) {
           </form>
         </div>
       )}
-
-      {/* The part that is still not built, stated plainly rather than faked. */}
-      {state.stage === "eligible" ? (
-        <section className="mt-12 border-t border-border pt-6">
-          <h2 className="text-small text-text-muted">What happens when you start</h2>
-          <p className="mt-3 text-small text-text-muted prose">
-            Your clock starts the moment you press the button, and runs for{" "}
-            {duration ?? "the configured window"}. Your customer count is
-            verified against your Stripe account and shown publicly until you
-            reach 10 or the window closes.
-          </p>
-        </section>
-      ) : null}
 
       <section className="mt-12 border-t border-border pt-6">
         <h2 className="text-small text-text-muted">What becomes public</h2>

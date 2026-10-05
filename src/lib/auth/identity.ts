@@ -52,20 +52,53 @@ function firstString(...values: unknown[]): string | null {
 }
 
 /**
+ * The provider id Supabase uses for X.
+ *
+ * It was `twitter` — the legacy OAuth 1.0a provider, which Supabase's current
+ * X support replaces. The old id is gone rather than kept as an alias: nothing
+ * has ever linked through it in this project, and accepting both would mean
+ * treating an identity from a provider we no longer offer as a verified X
+ * account.
+ */
+export const X_PROVIDER_ID = "x";
+
+/** The metadata keys X has used for the username, in the order they are tried. */
+const HANDLE_KEYS = ["user_name", "preferred_username", "screen_name"] as const;
+
+/**
  * The handle X reports for the account.
  *
  * X's OAuth 2.0 identity payload has carried the username under several names
- * over time — `user_name` and `preferred_username` both appear, and older
- * payloads used `screen_name`. All three are checked so a rename upstream does
- * not silently produce profiles with no handle.
+ * over time. All three are tried so a rename upstream does not silently produce
+ * profiles with no handle.
  *
- * Normalised through the same validator the join form used, so a handle that
+ * Normalised through the same validator the join form uses, so a handle that
  * arrives from X is held to exactly the character set a typed one was.
+ *
+ * ## The dev-only key log
+ *
+ * Which key is present is the one thing that cannot be deduced when this stops
+ * working, and it is also the one thing that is safe to print — the *names* are
+ * ours to know, the *values* are a person's account. So only the names are
+ * logged, only outside production, and only when no handle was found.
  */
 function handleFromIdentity(identity: Identity): string | null {
   const data = identity.identity_data ?? {};
-  const raw = firstString(data.user_name, data.preferred_username, data.screen_name);
-  return raw ? normaliseXHandle(raw) : null;
+  const raw = firstString(...HANDLE_KEYS.map((key) => data[key]));
+
+  if (raw) return normaliseXHandle(raw);
+
+  if (process.env.NODE_ENV !== "production") {
+    // Key names only. Logging `data` here would put a founder's account
+    // metadata, including whatever address the provider sent, into a log line.
+    console.warn("[auth] no X handle in identity metadata", {
+      provider: identity.provider,
+      keysPresent: Object.keys(data).sort(),
+      keysTried: [...HANDLE_KEYS],
+    });
+  }
+
+  return null;
 }
 
 /**
@@ -101,8 +134,13 @@ export function profileFromUser(user: AuthUserLike): ProfileDraft {
 
   // The X identity wins for the handle regardless of order, so a Google sign-in
   // after a linked X sign-in does not lose it.
+  //
+  // Only an X identity sets this. The handle is shown on the board and linked to
+  // x.com, so a handle nobody proved they own would let one founder post as
+  // another. A Google-only account has no handle here, and the board shows its
+  // display name instead.
   for (const identity of identities) {
-    if (!xHandle && identity.provider === "twitter") {
+    if (!xHandle && identity.provider === X_PROVIDER_ID) {
       xHandle = handleFromIdentity(identity);
     }
   }
@@ -123,19 +161,21 @@ export function profileFromUser(user: AuthUserLike): ProfileDraft {
 }
 
 /**
- * Whether a signed-in founder still has to supply something before they can
- * enter the race.
+ * Whether a signed-in founder still has to supply an address.
  *
- * Only the two fields the product cannot work without: an address to reach them
- * at, and the handle that identifies them on the board. The name is nice to
- * have and is displayed, but a founder with no name is a cosmetic problem; one
- * with no handle has no public identity at all.
+ * This used to also require an X handle, on the reasoning that a founder with
+ * no handle has no public identity. That reasoning was wrong in one specific
+ * way: it made an X account mandatory to enter a product that offers Google as
+ * an equal way in, and it read a handle the founder had not proved they owned as
+ * an identity. The board shows the display name when there is no handle, so the
+ * only thing genuinely missing without one is an address to write to.
+ *
+ * The rest of the profile step — the product name and the consent — is not
+ * derived from a provider at all, so it is not something this can report on; the
+ * racer row's absence is what says that step is unfinished.
  */
-export function missingProfileFields(draft: ProfileDraft): Array<"email" | "xHandle"> {
-  const missing: Array<"email" | "xHandle"> = [];
-  if (!draft.email) missing.push("email");
-  if (!draft.xHandle) missing.push("xHandle");
-  return missing;
+export function missingProfileFields(draft: ProfileDraft): Array<"email"> {
+  return draft.email ? [] : ["email"];
 }
 
 /**

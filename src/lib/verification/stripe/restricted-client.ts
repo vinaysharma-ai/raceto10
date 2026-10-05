@@ -5,6 +5,7 @@ import Stripe from "stripe";
 import { openForConnection } from "@/lib/vault/server";
 
 import type { VerificationProvider } from "../types.ts";
+import { createFixturePort, fixtureMode, isFixtureKey } from "./fixture.ts";
 import {
   createStripeRestrictedKeyAdapter,
   type StripeRestrictedPort,
@@ -124,6 +125,42 @@ function buildPort(): StripeRestrictedPort {
 }
 
 /**
+ * The port this process will actually use.
+ *
+ * ## Fixture mode is chosen here, once
+ *
+ * When `fixtureMode()` is false — which is every deployment, because it also
+ * requires `NODE_ENV !== "production"` — this returns the real port and nothing
+ * else is reachable. The fixture port is not consulted, not constructed, and a
+ * fixture key goes to Stripe, which refuses it with a 401 that the adapter
+ * already reports as a rejected credential.
+ *
+ * The check is deliberately at construction rather than inside each method. A
+ * per-call branch is one that can be reached by a code path that forgot to read
+ * the flag; a whole port that was never built cannot be reached at all.
+ */
+function portFor(racerId: string): StripeRestrictedPort {
+  const real = buildPort();
+
+  if (!fixtureMode()) return real;
+
+  // Local development with the flag on. Fixture keys are answered from the
+  // file; a real key still goes to Stripe, so the mode is additive rather than
+  // blocking.
+  const fixture = createFixturePort(racerId);
+
+  const pick = (secretKey: string) => (isFixtureKey(secretKey) ? fixture : real);
+
+  return {
+    account: (secretKey) => pick(secretKey).account(secretKey),
+    customers: (secretKey, params) => pick(secretKey).customers(secretKey, params),
+    charges: (secretKey, params) => pick(secretKey).charges(secretKey, params),
+    subscriptions: (secretKey, params) =>
+      pick(secretKey).subscriptions!(secretKey, params),
+  };
+}
+
+/**
  * The Stripe restricted-key provider, scoped to one racer.
  *
  * ## Why this takes an owner, and is not memoised globally
@@ -163,7 +200,7 @@ function buildPort(): StripeRestrictedPort {
  * filter below, and nothing else.
  */
 export function stripeRestrictedProvider(owner: { racerId: string }): VerificationProvider {
-  return createStripeRestrictedKeyAdapter(buildPort(), {
+  return createStripeRestrictedKeyAdapter(portFor(owner.racerId), {
     resolveCredential: async (ref) => {
       const { createAdminClient } = await import("@/lib/supabase/admin");
       const db = createAdminClient();

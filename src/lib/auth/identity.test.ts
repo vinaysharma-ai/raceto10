@@ -21,8 +21,8 @@ const google = {
   },
 };
 
-const twitter = {
-  provider: "twitter",
+const xAccount = {
+  provider: "x",
   identity_data: {
     user_name: "ada",
     preferred_username: "ada",
@@ -44,7 +44,7 @@ test("a Google user yields a name, an address and an avatar", () => {
 });
 
 test("an X user yields their handle", () => {
-  const draft = profileFromUser({ email: "ada@example.com", identities: [twitter] });
+  const draft = profileFromUser({ email: "ada@example.com", identities: [xAccount] });
 
   assert.equal(draft.xHandle, "ada");
   assert.equal(draft.name, "Ada Lovelace");
@@ -53,7 +53,7 @@ test("an X user yields their handle", () => {
 test("X omitting the email yields no email, rather than a guess", () => {
   // The common case. `01` §7 says to ask for one manually rather than to
   // invent or infer it.
-  const draft = profileFromUser({ email: null, identities: [twitter] });
+  const draft = profileFromUser({ email: null, identities: [xAccount] });
 
   assert.equal(draft.email, null);
   assert.deepEqual(missingProfileFields(draft), ["email"]);
@@ -65,7 +65,7 @@ test("an email inside a token payload is not treated as the account address", ()
   const draft = profileFromUser({
     email: null,
     identities: [
-      { provider: "twitter", identity_data: { user_name: "ada", email: "someone@else.com" } },
+      { provider: "x", identity_data: { user_name: "ada", email: "someone@else.com" } },
     ],
   });
 
@@ -77,7 +77,7 @@ test("a linked X handle survives signing in with Google", () => {
   // that identifies the founder on the board.
   const draft = profileFromUser({
     email: "ada@example.com",
-    identities: [google, twitter],
+    identities: [google, xAccount],
   });
 
   assert.equal(draft.xHandle, "ada");
@@ -86,7 +86,7 @@ test("a linked X handle survives signing in with Google", () => {
 test("the handle is found however X spells it", () => {
   for (const key of ["user_name", "preferred_username", "screen_name"]) {
     const draft = profileFromUser({
-      identities: [{ provider: "twitter", identity_data: { [key]: "ada" } }],
+      identities: [{ provider: "x", identity_data: { [key]: "ada" } }],
     });
     assert.equal(draft.xHandle, "ada", `${key} should be read`);
   }
@@ -96,7 +96,7 @@ test("a handle from X is held to the same rules as a typed one", () => {
   // A provider payload is still untrusted input. A handle containing a slash or
   // a query would rewrite the `x.com/${handle}` link the board builds.
   const draft = profileFromUser({
-    identities: [{ provider: "twitter", identity_data: { user_name: "a/b" } }],
+    identities: [{ provider: "x", identity_data: { user_name: "a/b" } }],
   });
 
   assert.equal(draft.xHandle, null);
@@ -105,7 +105,7 @@ test("a handle from X is held to the same rules as a typed one", () => {
 test("an over-long handle from X is refused rather than truncated", () => {
   // Truncating would store a handle belonging to somebody else.
   const draft = profileFromUser({
-    identities: [{ provider: "twitter", identity_data: { user_name: "a".repeat(20) } }],
+    identities: [{ provider: "x", identity_data: { user_name: "a".repeat(20) } }],
   });
 
   assert.equal(draft.xHandle, null);
@@ -132,7 +132,7 @@ test("metadata fills in a name when no identity carries one", () => {
 test("whitespace-only values are treated as absent", () => {
   const draft = profileFromUser({
     email: "   ",
-    identities: [{ provider: "twitter", identity_data: { user_name: "   " } }],
+    identities: [{ provider: "x", identity_data: { user_name: "   " } }],
   });
 
   assert.equal(draft.email, null);
@@ -144,17 +144,21 @@ test("whitespace-only values are treated as absent", () => {
 // ---------------------------------------------------------------------------
 
 test("a complete profile has nothing missing", () => {
-  const draft = profileFromUser({ email: "ada@example.com", identities: [google, twitter] });
+  const draft = profileFromUser({ email: "ada@example.com", identities: [google, xAccount] });
   assert.deepEqual(missingProfileFields(draft), []);
 });
 
-test("a name is not required — it is cosmetic, a handle is not", () => {
-  const draft = profileFromUser({ email: "ada@example.com", identities: [twitter] });
+test("neither a name nor a handle is required — only an address is", () => {
+  // A Google-only founder has no handle, and the board shows their display name
+  // instead. Requiring one would make X mandatory to enter.
+  const draft = profileFromUser({ email: "ada@example.com", identities: [google] });
   assert.equal(draft.name, "Ada Lovelace");
+  assert.equal(draft.xHandle, null);
+  assert.deepEqual(missingProfileFields(draft), []);
 
   const nameless = profileFromUser({
     email: "ada@example.com",
-    identities: [{ provider: "twitter", identity_data: { user_name: "ada" } }],
+    identities: [{ provider: "x", identity_data: { user_name: "ada" } }],
   });
   assert.deepEqual(missingProfileFields(nameless), []);
 });

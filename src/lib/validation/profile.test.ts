@@ -1,18 +1,22 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 
-import { profileSchema } from "./profile.ts";
+import { PROFILE_EMAIL_MAX, PRODUCT_NAME_MAX, profileSchema } from "./profile.ts";
 
 /**
- * The two fields a founder types themselves.
+ * The profile step: product name, display name, email, consent.
  *
- * The handle is the one that matters. It is the first column of the leaderboard
- * and the thing the board links to, so a value that is *nearly* right is worse
- * than a rejection: it would point at somebody else's account under this
- * founder's name.
+ * The two that matter are the product name and the consent. The first is what
+ * the board shows beside the founder, and the second is what makes showing any
+ * of it legitimate — so both are required, and the consent has to be an actual
+ * tick rather than anything truthy.
+ *
+ * The X handle is deliberately absent. It used to be collected here, and it
+ * moved to the sign-in path because a typed handle is a claim rather than a
+ * proof, and the board publishes it as a link.
  */
 
-const base = { xHandle: "ada", email: "ada@example.com" };
+const base = { productName: "Ledgerly", email: "ada@example.com", consent: "yes" };
 
 test("a complete submission parses", () => {
   const result = profileSchema.safeParse({ ...base, name: "Ada Lovelace" });
@@ -20,8 +24,9 @@ test("a complete submission parses", () => {
   if (!result.success) return;
   assert.deepEqual(result.data, {
     name: "Ada Lovelace",
-    xHandle: "ada",
+    productName: "Ledgerly",
     email: "ada@example.com",
+    consent: "yes",
   });
 });
 
@@ -33,51 +38,63 @@ test("the name is optional and becomes null, not an empty string", () => {
   }
 });
 
-test("a handle is accepted in every form people paste", () => {
-  // Every spelling `normaliseXHandle` was written for. They all mean one
-  // account, so refusing any of them would be refusing the person.
-  //
-  // A query or fragment belongs here rather than with the refusals: people
-  // paste `x.com/ada?ref=something` straight from a share sheet, and the
-  // referrer is not part of who they are.
-  for (const raw of [
-    "ada",
-    "@ada",
-    "x.com/ada",
-    "https://x.com/ada",
-    "twitter.com/ada",
-    "ada?x=1",
-    "ada#top",
-  ]) {
-    const result = profileSchema.safeParse({ ...base, xHandle: raw });
-    assert.equal(result.success, true, raw);
-    if (result.success) assert.equal(result.data.xHandle, "ada", raw);
+// ---------------------------------------------------------------------------
+// The product name
+// ---------------------------------------------------------------------------
+
+test("a product name is required, and a blank one is not a name", () => {
+  for (const productName of [undefined, "", " ", "a"]) {
+    const result = profileSchema.safeParse({ ...base, productName });
+    assert.equal(result.success, false, JSON.stringify(productName));
   }
 });
 
-test("a handle that would point at the wrong account is refused", () => {
-  // `x.com/a/b` is not a profile. Taking its first segment would store a
-  // different handle than the one pasted — a valid-looking value produced from
-  // an invalid input, which is the failure mode this guards.
-  for (const raw of ["a/b", "x.com/a/b", "a b", "ad$a", "ada!"]) {
-    const result = profileSchema.safeParse({ ...base, xHandle: raw });
-    assert.equal(result.success, false, `${JSON.stringify(raw)} should be refused`);
-  }
+test("a two-character product name is accepted", () => {
+  // The boundary is inclusive. A product genuinely called "X" or "10" is short,
+  // not invalid, and refusing it would be refusing a real founder.
+  const result = profileSchema.safeParse({ ...base, productName: "10" });
+  assert.equal(result.success, true);
 });
 
-test("an over-long handle is refused rather than truncated", () => {
-  // Truncating would store a handle belonging to somebody else.
-  const result = profileSchema.safeParse({ ...base, xHandle: "a".repeat(16) });
+test("an over-long product name is refused rather than truncated", () => {
+  const result = profileSchema.safeParse({
+    ...base,
+    productName: "a".repeat(PRODUCT_NAME_MAX + 1),
+  });
   assert.equal(result.success, false);
 });
 
-test("a missing handle is refused, because the board has no other identifier", () => {
-  const result = profileSchema.safeParse({ email: "ada@example.com" });
+test("the product name is trimmed before it is measured", () => {
+  // Otherwise "  Ledgerly  " passes a length check on its padding.
+  const result = profileSchema.safeParse({ ...base, productName: "  Ledgerly  " });
+  assert.equal(result.success, true);
+  if (result.success) assert.equal(result.data.productName, "Ledgerly");
+});
+
+// ---------------------------------------------------------------------------
+// Consent
+// ---------------------------------------------------------------------------
+
+test("consent has to be the ticked value, not merely present", () => {
+  // An unticked checkbox submits nothing or "no"; a truthy coercion would take
+  // both as agreement. This is the one field where that would matter most.
+  for (const consent of [undefined, "", "no", "on", "true", "YES"]) {
+    const result = profileSchema.safeParse({ ...base, consent });
+    assert.equal(result.success, false, JSON.stringify(consent));
+  }
+});
+
+test("a missing consent says so, rather than reporting a type error", () => {
+  const result = profileSchema.safeParse({ productName: "Ledgerly", email: "ada@example.com" });
   assert.equal(result.success, false);
   if (!result.success) {
-    assert.match(result.error.issues[0]?.message ?? "", /X handle/);
+    assert.match(result.error.issues[0]?.message ?? "", /Tick the box/);
   }
 });
+
+// ---------------------------------------------------------------------------
+// The email
+// ---------------------------------------------------------------------------
 
 test("the email is trimmed and lowercased", () => {
   const result = profileSchema.safeParse({ ...base, email: "  Ada@Example.COM  " });
@@ -95,7 +112,7 @@ test("an address that is not one is refused", () => {
 test("an over-long address is refused", () => {
   const result = profileSchema.safeParse({
     ...base,
-    email: `${"a".repeat(250)}@example.com`,
+    email: `${"a".repeat(PROFILE_EMAIL_MAX)}@example.com`,
   });
   assert.equal(result.success, false);
 });
@@ -108,7 +125,7 @@ test("an over-long name is refused", () => {
 test("non-string input does not crash the parser", () => {
   // FormData can hand back a File for a field, and a form can simply omit one.
   for (const bad of [null, undefined, 42, {}, []]) {
-    const result = profileSchema.safeParse({ ...base, xHandle: bad });
+    const result = profileSchema.safeParse({ ...base, productName: bad });
     assert.equal(result.success, false, JSON.stringify(bad));
   }
 });

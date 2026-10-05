@@ -2,31 +2,38 @@ import { z } from "zod";
 
 // Relative with an explicit extension: Node's native type-stripping, which runs
 // the tests, does not resolve the `@/` alias.
-import { RACER_NAME_MAX, normaliseXHandle } from "./racer.ts";
+import { RACER_NAME_MAX } from "./racer.ts";
 
 /**
- * Validation for the fields a founder supplies themselves.
+ * Validation for the profile step.
  *
- * `01` §7 orders `/join` as identity, then only the fields the provider did not
- * supply, then the provider connection, then eligibility. This module is the
- * second step: Google gives us a name and usually an address, X gives us a
- * handle, and whatever is still missing is asked for here.
+ * ## What is asked for, and why each thing is here
  *
- * ## Why only two fields are required
+ * The product name and the consent are the two things the product cannot work
+ * without: the first is what the board shows next to the founder, and the second
+ * is what makes showing any of it legitimate. The display name is prefilled from
+ * the provider and optional; the email is required only because some providers
+ * (X, often) do not supply one.
  *
- * The same rule as `missingProfileFields` in `src/lib/auth/identity.ts`. An
- * address to reach them at, and the handle that identifies them on the board.
- * The name is cosmetic — a founder with no name is a blank cell, while one with
- * no handle has no public identity at all.
+ * ## The X handle is no longer collected
  *
- * ## Why the handle is normalised rather than merely checked
+ * It used to be, with a message explaining it was how you appear on the board.
+ * But a typed handle is a claim, not a proof: anybody could enter `@naval` and
+ * the board would link it. The handle now comes only from an X sign-in, which is
+ * the one path that proves the account. A Google-only founder appears under
+ * their display name and has no X link, which is the honest rendering rather
+ * than an unverified one.
  *
- * `normaliseXHandle` is the same function the OAuth callback runs a provider's
- * handle through. Typed input and provider input are held to one rule, so a
- * handle cannot be valid by one path and invalid by the other.
+ * ## Consent is a checkbox that has to be ticked
+ *
+ * `z.literal("yes")` rather than a truthy coercion. An absent checkbox is the
+ * string "no" or missing entirely, and both must fail with a sentence about
+ * consent rather than a type error.
  */
 
 export const PROFILE_EMAIL_MAX = 254;
+export const PRODUCT_NAME_MIN = 2;
+export const PRODUCT_NAME_MAX = 60;
 
 /**
  * Every field is coerced to a string before the schema sees it.
@@ -36,9 +43,6 @@ export const PROFILE_EMAIL_MAX = 254;
  * rather than as input, so a schema written on `z.string()` reports
  * "expected string, received undefined" for a field somebody simply left blank.
  * That is accurate and useless: it is the message a founder would read.
- *
- * Coercing first means the real rules always run, and a blank field fails the
- * check written for it rather than a type error.
  */
 const asText = (value: unknown): string => (typeof value === "string" ? value.trim() : "");
 
@@ -47,16 +51,15 @@ export const profileSchema = z.preprocess(
     const input = (raw ?? {}) as Record<string, unknown>;
     return {
       name: asText(input.name),
-      xHandle: asText(input.xHandle),
+      productName: asText(input.productName),
       email: asText(input.email),
+      consent: asText(input.consent),
     };
   },
   z.object({
     /**
-     * Optional. Absent and empty mean the same thing: leave it as it is.
-     *
-     * Becomes `null` so the caller has one value to reason about rather than two
-     * spellings of "nothing".
+     * Optional, prefilled from the provider. Absent and empty mean the same
+     * thing: leave whatever is there.
      */
     name: z
       .string()
@@ -66,12 +69,15 @@ export const profileSchema = z.preprocess(
       )
       .transform((value) => (value.length > 0 ? value : null)),
 
-    xHandle: z
+    productName: z
       .string()
-      .transform((value) => normaliseXHandle(value))
       .refine(
-        (value): value is string => value !== null,
-        "Add your X handle. It's how you appear on the board.",
+        (value) => value.length >= PRODUCT_NAME_MIN,
+        "Add the name of the product you are racing.",
+      )
+      .refine(
+        (value) => value.length <= PRODUCT_NAME_MAX,
+        `Keep the product name under ${PRODUCT_NAME_MAX} characters.`,
       ),
 
     email: z
@@ -82,6 +88,12 @@ export const profileSchema = z.preprocess(
         (value) => value.length <= PROFILE_EMAIL_MAX,
         "That email address is too long.",
       ),
+
+    // The one checkbox. Everything it covers is listed next to it on the form,
+    // so this is the literal agreement rather than a link to a policy.
+    consent: z.literal("yes", {
+      message: "Tick the box to race in public. Nothing is shown without it.",
+    }),
   }),
 );
 

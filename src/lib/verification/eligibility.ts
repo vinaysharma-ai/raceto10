@@ -73,9 +73,9 @@ export function checkEligibility(facts: EligibilityFacts): Eligibility {
 export function describeIneligibility(reason: IneligibleReason): string {
   switch (reason) {
     case "has_customers":
-      return "This account already has paying customers, so it can't enter. RaceTo10 is for products starting from zero.";
+      return "Your Stripe account already has paying customers, so it can't enter this race. Nothing was saved.";
     case "has_mrr":
-      return "This account already has recurring revenue, so it can't enter. RaceTo10 is for products starting from zero.";
+      return "Your Stripe account already has recurring revenue, so it can't enter this race. Nothing was saved.";
     case "mrr_unknown":
       return "We couldn't read your subscription data, so we can't confirm you're starting from $0 MRR. Add Subscriptions → Read to your restricted key and try again.";
   }

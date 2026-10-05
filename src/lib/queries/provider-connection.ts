@@ -246,6 +246,28 @@ export function connectionStore(): ConnectionStore {
       if (error) throw new Error(error.message);
     },
 
+    /**
+     * `registered` (or a previous failure) becomes `ready`.
+     *
+     * The `.in(...)` is the whole safety of this: the update can only ever move
+     * a racer who has not started. A reconnect by somebody already racing, or
+     * already finished, matches nothing and changes nothing — which matters
+     * because activation's precondition is `status = 'ready'` and a stray write
+     * here would reopen a closed race.
+     */
+    async markReady(racerId) {
+      const { createAdminClient } = await import("@/lib/supabase/admin");
+      const db = createAdminClient();
+
+      const { error } = await db
+        .from("racer")
+        .update({ status: "ready" })
+        .eq("id", racerId)
+        .in("status", ["registered", "verification_failed"]);
+
+      if (error) throw new Error(error.message);
+    },
+
     seal: (plaintext, connectionId) => sealForConnection(plaintext, connectionId),
   };
 }

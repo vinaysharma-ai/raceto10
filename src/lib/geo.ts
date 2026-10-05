@@ -93,6 +93,20 @@ export function readRequestGeo(headers: Headers): RequestGeo {
   };
 }
 
+/**
+ * Rounded to one decimal place.
+ *
+ * One decimal of a degree is about 11 km. That is the granularity the header
+ * itself carries — a city centroid — so keeping the extra digits would store a
+ * precision the data does not have, on a map whose whole claim is that the dots
+ * are real. Rounding here rather than at the database, so the value that is
+ * agreed to is the value that is stored.
+ */
+export function roundCoordinate(value: number | null): number | null {
+  if (value === null) return null;
+  return Math.round(value * 10) / 10;
+}
+
 /** True when there is enough here to place a dot on the globe. */
 export function isPlottable(geo: {
   latitude: number | null;

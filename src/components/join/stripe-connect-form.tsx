@@ -44,35 +44,54 @@ export function StripeConnectForm() {
 
       <ol className="mt-4 flex flex-col gap-1 text-small text-text-muted prose">
         <li>
-          1. In Stripe, go to{" "}
-          <span className="text-text">Developers → API keys → Create restricted key</span>.
+          1. Open{" "}
+          <a
+            href="https://dashboard.stripe.com/apikeys"
+            target="_blank"
+            rel="noopener noreferrer"
+            className="text-text underline underline-offset-4"
+          >
+            dashboard.stripe.com/apikeys
+          </a>
+          .
         </li>
         <li>
-          2. Give it <span className="text-text">Read</span> access to Customers,
-          Charges and Subscriptions. Leave every write permission as{" "}
-          <span className="text-text">None</span>.
+          2. Create a <span className="text-text">restricted key</span>.
         </li>
-        <li>3. Create it and paste it below.</li>
+        <li>
+          3. Give it <span className="text-text">Read</span> on Customers,
+          Charges, Subscriptions, Invoices and PaymentIntents, and nothing else.
+        </li>
+        <li>4. Create it and paste it below.</li>
       </ol>
 
       <form action={formAction} className="mt-6">
-        <label htmlFor="apiKey" className="text-small text-text-muted">
-          Restricted key · never shown again
-        </label>
-        <Input
-          id="apiKey"
-          name="apiKey"
-          type="password"
-          required
-          autoComplete="off"
-          spellCheck={false}
-          placeholder="rk_live_…"
-          className="mt-2 max-w-md font-mono"
-        />
+        <div className="flex flex-col gap-2">
+          <label htmlFor="apiKey" className="text-small text-text-muted">
+            Restricted key · never shown again
+          </label>
+          <Input
+            id="apiKey"
+            name="apiKey"
+            type="password"
+            required
+            autoComplete="off"
+            spellCheck={false}
+            placeholder="rk_live_…"
+            className="max-w-md font-mono"
+          />
+        </div>
 
-        <p className="mt-2 text-small text-text-muted prose">
-          Stored encrypted. We can read your customer count; we can never write
-          to your account.
+        <p className="mt-2 max-w-lg text-small text-text-muted prose">
+          We only read. Your key is encrypted, never shown again, and deleted
+          when your race ends.
+        </p>
+
+        {/* Named so nobody spends time looking for it. A founder who came here
+            expecting to choose a processor should be told the choice does not
+            exist yet rather than left to wonder. */}
+        <p className="mt-1 text-small text-text-muted prose">
+          Lemon Squeezy: coming soon.
         </p>
 
         {state.status === "error" ? (
