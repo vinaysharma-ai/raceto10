@@ -1,0 +1,40 @@
+-- The verified X handle stops being writable by its owner.
+--
+-- ## The hole
+--
+-- `20260928120300` gave `authenticated` a column-level UPDATE on four columns of
+-- `profiles`:
+--
+--     grant update (name, email, x_handle, avatar_url) on table profiles to authenticated;
+--
+-- Three of those are correctly user-owned. `x_handle` is not. It is the one
+-- column in that list that other people's trust depends on, because
+-- `public_racers` projects it and the board renders it as a link to x.com.
+--
+-- The rule the product states is that a handle is shown only when it was proved
+-- by signing in with X. A Google-only founder appears under their display name
+-- and has no link, because a typed handle is a claim rather than a proof. The
+-- join form stopped collecting it, which closed the form. It did not close this:
+-- a founder could still reach PostgREST directly with the publishable key and
+-- set `x_handle` on their own row to somebody else's, and the board would
+-- publish an impersonation as verified.
+--
+-- ## What this changes, and what it does not
+--
+-- One `revoke`. The column stays, the RLS policy stays, and the row policy that
+-- requires `id = auth.uid()` stays. What goes away is the ability to write that
+-- one column as the signed-in user.
+--
+-- Nothing in the application writes `x_handle` through the user's session. The
+-- only writer is `ensureProfile`, which runs in the OAuth callback and uses the
+-- service role — and a service-role connection bypasses grants entirely, so the
+-- handle still arrives from the provider exactly as before. Phase 11's X-linking
+-- takes the same path.
+--
+-- ## Additive in the sense that matters
+--
+-- It removes a privilege rather than a column or a row: no data changes, no
+-- schema changes, and no existing policy is touched. Reversing it is one
+-- `grant update (x_handle)`.
+
+revoke update (x_handle) on table public.profiles from authenticated;
