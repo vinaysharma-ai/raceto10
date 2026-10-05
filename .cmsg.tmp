@@ -1,0 +1,27 @@
+Phase 6a: expired races, and the real finish time
+
+The window. Payments are now read only up to `ends_at`, and the read is
+skipped entirely when the window has already closed. A sale made the day
+after a race ended is not a customer of that race, and without the clamp the
+count would keep climbing after the clock stopped, letting a founder lose
+and then quietly win.
+
+Expiry. A racing racer past `ends_at` with fewer than ten customers moves to
+`expired`, by compare-and-set on `status = 'racing'` so exactly one run
+writes it and announces it. The event is stamped with the close of the
+window rather than with the poll that noticed it.
+
+Ordering. The finish branch is checked first and the expiry branch is an
+`else if`, so a race that reached ten is a win even when the poller only
+notices afterwards. Ten customers is a win whenever it happened.
+
+finished_at. Now the tenth customer's `first_paid_at`, not the reconcile
+instant. A poll runs every thirty minutes, so "when we noticed" can be most
+of an hour after "when it happened", and a board that records real events
+cannot round that away. The `finished` event carries the same instant, so
+the timeline and the race end agree.
+
+Eight new tests, including one that a still-open window never expires and
+one that a payment after the close is not counted.
+
+Co-Authored-By: Claude Code <noreply@anthropic.com>

@@ -32,6 +32,8 @@ const RACER = "racer-ada";
 const CONNECTION_ID = "11111111-1111-4111-8111-111111111111";
 const ACTIVATED = new Date("2026-09-29T00:00:00.000Z");
 const NOW = new Date("2026-09-29T12:00:00.000Z");
+/** A week after activation, so the default racer's window is still open at NOW. */
+const ENDS_AT = new Date("2026-10-06T00:00:00.000Z");
 
 type Recorded = { method: string; args: unknown[] };
 
@@ -44,6 +46,9 @@ function fakeStore(
     /** Forces the compare-and-set to lose, as a concurrent run would. */
     losesAdvance?: boolean;
     losesReachedTen?: boolean;
+    losesExpired?: boolean;
+    /** First-paid instants of already-stored customers, keyed by customer id. */
+    paidAt?: Record<string, Date>;
   } = {},
 ): { store: ReconcileStore; recorded: Recorded[]; customers: Set<string> } {
   const recorded: Recorded[] = [];
@@ -51,6 +56,12 @@ function fakeStore(
 
   // Mirrors `race_customer`'s unique key.
   const customers = new Set<string>(options.stored ?? []);
+
+  // The stored `first_paid_at` per customer, which is what the finish time is
+  // read from. Seeded for pre-existing rows so a test can say when they paid.
+  const paidAt = new Map<string, Date>(
+    Object.entries(options.paidAt ?? {}).map(([id, at]) => [id, at]),
+  );
 
   const store: ReconcileStore = {
     async activeRacers() {
@@ -60,6 +71,7 @@ function fakeStore(
           {
             id: RACER,
             activatedAt: ACTIVATED,
+            endsAt: ENDS_AT,
             currentCustomerCount: customers.size,
             countReconciledAt: null,
             reachedTenAt: null,
@@ -82,7 +94,15 @@ function fakeStore(
     },
     async recordPayments(racerId, payments: ProviderPayment[]) {
       log("recordPayments", racerId, payments.length);
-      for (const payment of payments) customers.add(payment.externalCustomerId);
+      for (const payment of payments) {
+        customers.add(payment.externalCustomerId);
+        // The real store writes `first_paid_at` from the charge's own instant
+        // and keeps the earliest, so a customer billed twice keeps their first.
+        const existing = paidAt.get(payment.externalCustomerId);
+        if (!existing || payment.paidAt.getTime() < existing.getTime()) {
+          paidAt.set(payment.externalCustomerId, payment.paidAt);
+        }
+      }
     },
     async countCustomers(racerId) {
       log("countCustomers", racerId);
@@ -97,6 +117,20 @@ function fakeStore(
       log("markReachedTen", racerId, at);
       if (options.losesReachedTen) return false;
       return true;
+    },
+    async nthCustomerPaidAt(racerId, n) {
+      log("nthCustomerPaidAt", racerId, n);
+      // Ordered by `first_paid_at`, so the nth is the nth-earliest.
+      const times = [...paidAt.values()].sort((a, b) => a.getTime() - b.getTime());
+      return times[n - 1] ?? null;
+    },
+    async markExpired(racerId) {
+      log("markExpired", racerId);
+      if (options.losesExpired) return false;
+      return true;
+    },
+    async markConnectionBroken(connectionId, errorCode) {
+      log("markConnectionBroken", connectionId, errorCode);
     },
     async recordEvent(input) {
       log("recordEvent", input);
@@ -144,6 +178,7 @@ function charge(id: string, customer: string, overrides: Record<string, unknown>
 const racerAt = (count: number, overrides: Partial<ActiveRacer> = {}): ActiveRacer => ({
   id: RACER,
   activatedAt: ACTIVATED,
+  endsAt: ENDS_AT,
   currentCustomerCount: count,
   countReconciledAt: null,
   reachedTenAt: null,
@@ -520,4 +555,159 @@ test("each racer is reconciled with a provider scoped to them", async () => {
 test("reconcileActiveRacers takes no count or customer from its caller", () => {
   // Structural: there is no parameter for a client-supplied number to arrive in.
   assert.equal(reconcileActiveRacers.length, 2, "only (store, providerFor) are required");
+});
+
+
+// ---------------------------------------------------------------------------
+// The window closes
+// ---------------------------------------------------------------------------
+
+/** A week long, so `ENDS_AT` is exactly when the default window closes. */
+const closedRacer = (count: number, overrides: Partial<ActiveRacer> = {}) =>
+  racerAt(count, { endsAt: new Date("2026-09-29T06:00:00.000Z"), ...overrides });
+
+test("a race past its window with fewer than ten expires", async () => {
+  const { store, recorded } = fakeStore();
+
+  const outcome = await reconcileRacer(store, adapter(), closedRacer(3), NOW);
+
+  assert.equal(outcome.ok, true);
+  if (outcome.ok) assert.equal(outcome.expired, true);
+  assert.equal(recorded.some((r) => r.method === "markExpired"), true);
+});
+
+test("a race still inside its window does not expire", async () => {
+  // NOW is before ENDS_AT, so the clock is still running. Expiring here would
+  // end a race that has hours left.
+  const { store, recorded } = fakeStore();
+
+  const outcome = await reconcileRacer(store, adapter(), racerAt(3), NOW);
+
+  assert.equal(outcome.ok, true);
+  if (outcome.ok) assert.equal(outcome.expired, false);
+  assert.equal(recorded.some((r) => r.method === "markExpired"), false);
+});
+
+test("a race that reached ten is finished, not expired, even after the window closed", async () => {
+  // The ordering this exists to prove. Ten customers at any point is a win, and
+  // a poller that only noticed after `ends_at` must not turn it into a loss.
+  const stored = Array.from({ length: 10 }, (_, i) => `cus_${i}`);
+  const { store, recorded } = fakeStore({ stored });
+
+  const outcome = await reconcileRacer(store, adapter(), closedRacer(10), NOW);
+
+  assert.equal(outcome.ok, true);
+  if (!outcome.ok) return;
+
+  // The win is recorded even though the poller is late. Ten customers is a win
+  // whenever it happened; the run that notices after `ends_at` must not convert
+  // it into a loss.
+  assert.equal(outcome.finished, true);
+  assert.equal(outcome.expired, false, "a won race was expired");
+  assert.equal(recorded.some((r) => r.method === "markExpired"), false);
+});
+
+test("losing the expiry race does not emit a second event", async () => {
+  const { store, recorded } = fakeStore({ losesExpired: true });
+
+  const outcome = await reconcileRacer(store, adapter(), closedRacer(3), NOW);
+
+  assert.equal(outcome.ok, true);
+  if (outcome.ok) assert.equal(outcome.expired, false);
+  assert.equal(recorded.some((r) => r.method === "recordEvent"), false);
+});
+
+test("the expiry event is stamped with the close of the window, not the poll", async () => {
+  const { store, recorded } = fakeStore();
+  const endsAt = new Date("2026-09-29T06:00:00.000Z");
+
+  await reconcileRacer(store, adapter(), closedRacer(3), NOW);
+
+  const event = recorded.find((r) => r.method === "recordEvent")?.args[0] as {
+    type?: string;
+    occurredAt?: Date;
+  };
+  assert.equal(event?.type, "expired");
+  assert.equal(event?.occurredAt?.getTime(), endsAt.getTime());
+});
+
+// ---------------------------------------------------------------------------
+// When the race was actually won
+// ---------------------------------------------------------------------------
+
+test("finished_at is the tenth customer's first payment, not the reconcile time", async () => {
+  // The distinction the board rests on. A poll runs every thirty minutes, so
+  // "when we noticed" can be most of an hour after "when it happened" — and a
+  // race that says it was won at 12:00 when the money arrived at 11:31 is a race
+  // whose numbers are approximate.
+  const paidAt: Record<string, Date> = {};
+  const stored: string[] = [];
+
+  for (let i = 1; i <= 9; i += 1) {
+    const id = `cus_${i}`;
+    stored.push(id);
+    // Spread earlier in the day, all before the tenth.
+    paidAt[id] = new Date(`2026-09-29T0${i}:00:00.000Z`);
+  }
+
+  const tenthPaidAt = new Date("2026-09-29T11:31:00.000Z");
+
+  const { store, recorded } = fakeStore({ stored, paidAt });
+
+  const outcome = await reconcileRacer(
+    store,
+    chargingPort([
+      {
+        id: "ch_10",
+        created: Math.floor(tenthPaidAt.getTime() / 1000),
+        amount: 2000,
+        currency: "usd",
+        paid: true,
+        status: "succeeded",
+        customer: "cus_10",
+      },
+    ]),
+    racerAt(9),
+    NOW,
+  );
+
+  assert.equal(outcome.ok, true);
+  if (!outcome.ok) return;
+  assert.equal(outcome.finished, true);
+
+  const stamped = recorded.find((r) => r.method === "markReachedTen")?.args[1] as Date;
+  assert.equal(
+    stamped.getTime(),
+    tenthPaidAt.getTime(),
+    `finished at ${stamped.toISOString()}, expected the tenth payment at ${tenthPaidAt.toISOString()}`,
+  );
+  assert.notEqual(stamped.getTime(), NOW.getTime(), "finished_at was the reconcile time");
+});
+
+test("payments after the window closed are not counted", async () => {
+  // A sale made the day after the race ended is not a customer of that race.
+  // Without the clamp the count would keep climbing after the clock stopped,
+  // and a founder could lose and then quietly win.
+  const { store, recorded } = fakeStore();
+
+  const afterClose = {
+    id: "ch_late",
+    created: Math.floor(new Date("2026-09-29T09:00:00.000Z").getTime() / 1000),
+    amount: 2000,
+    currency: "usd",
+    paid: true,
+    status: "succeeded",
+    customer: "cus_late",
+  };
+
+  // The window closes at 06:00; this payment is at 09:00.
+  const outcome = await reconcileRacer(store, chargingPort([afterClose]), closedRacer(0), NOW);
+
+  assert.equal(outcome.ok, true);
+  if (!outcome.ok) return;
+  assert.equal(outcome.customerCount, 0, "a payment after the window was counted");
+  assert.equal(
+    (recorded.find((r) => r.method === "recordPayments")?.args[1] as number) ?? -1,
+    0,
+  );
 });

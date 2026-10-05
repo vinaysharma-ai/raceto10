@@ -20,7 +20,7 @@ export function reconciliationStore(): ReconcileStore {
       const { data } = await db
         .from("racer")
         .select(
-          "id, activated_at, current_customer_count, count_reconciled_at, reached_ten_at",
+          "id, activated_at, race_end_at, current_customer_count, count_reconciled_at, reached_ten_at",
         )
         .eq("status", "racing");
 
@@ -29,10 +29,14 @@ export function reconciliationStore(): ReconcileStore {
       return data
         // A racer with no `activated_at` is not racing in any meaningful
         // sense — nothing can be counted against a window that does not exist.
-        .filter((row) => row.activated_at !== null)
+        // Same for `race_end_at`: a start with no end is not a race this job
+        // can decide anything about, and guessing an end from the configured
+        // duration would be inventing a window the racer never agreed to.
+        .filter((row) => row.activated_at !== null && row.race_end_at !== null)
         .map((row) => ({
           id: row.id,
           activatedAt: new Date(row.activated_at as string),
+          endsAt: new Date(row.race_end_at as string),
           currentCustomerCount: row.current_customer_count ?? 0,
           countReconciledAt: row.count_reconciled_at ? new Date(row.count_reconciled_at) : null,
           reachedTenAt: row.reached_ten_at ? new Date(row.reached_ten_at) : null,
@@ -210,6 +214,81 @@ export function reconciliationStore(): ReconcileStore {
 
       if (error) throw new Error(error.message);
       return (data?.length ?? 0) > 0;
+    },
+
+    /**
+     * The nth customer's first payment, oldest first.
+     *
+     * `first_paid_at` is written by `recordPayments` from the charge's own
+     * `created` instant, so this is the moment money arrived rather than the
+     * moment a poller saw it. Ordering by it and taking one row is a single
+     * query; the alternative — reading every customer back and sorting in
+     * process — moves the same work somewhere it cannot be indexed.
+     */
+    async nthCustomerPaidAt(racerId, n) {
+      const { createAdminClient } = await import("@/lib/supabase/admin");
+      const db = createAdminClient();
+
+      const { data, error } = await db
+        .from("race_customer")
+        .select("first_paid_at")
+        .eq("racer_id", racerId)
+        .order("first_paid_at", { ascending: true })
+        .range(n - 1, n - 1)
+        .maybeSingle();
+
+      if (error) throw new Error(error.message);
+      return data ? new Date(data.first_paid_at) : null;
+    },
+
+    /**
+     * Compare-and-set on the closing of the window.
+     *
+     * Guarded on `status = 'racing'`, which is the whole safety of it: a race
+     * that finished earlier in the same pass is no longer `racing`, so it
+     * matches nothing and cannot be expired after being won.
+     */
+    async markExpired(racerId) {
+      const { createAdminClient } = await import("@/lib/supabase/admin");
+      const db = createAdminClient();
+
+      const { data, error } = await db
+        .from("racer")
+        .update({ status: "expired" })
+        .eq("id", racerId)
+        .eq("status", "racing")
+        .select("id");
+
+      if (error) throw new Error(error.message);
+      return (data?.length ?? 0) > 0;
+    },
+
+    /**
+     * The key stopped working.
+     *
+     * Only the connection is written. The count is frozen by leaving it exactly
+     * as it was — writing it here, even to the same value, would make it a
+     * number this job decided rather than the last number the provider
+     * confirmed.
+     *
+     * `last_verified_at` is deliberately not touched: it records when the
+     * account was last read successfully, and stamping it now would claim a
+     * successful read that did not happen.
+     */
+    async markConnectionBroken(connectionId, errorCode) {
+      const { createAdminClient } = await import("@/lib/supabase/admin");
+      const db = createAdminClient();
+
+      const { error } = await db
+        .from("provider_connections")
+        .update({
+          connection_status: "broken",
+          error_code: errorCode,
+          updated_at: new Date().toISOString(),
+        })
+        .eq("id", connectionId);
+
+      if (error) throw new Error(error.message);
     },
 
     async recordEvent(input) {

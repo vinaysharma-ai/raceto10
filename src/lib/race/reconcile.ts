@@ -42,6 +42,8 @@ export const TARGET_CUSTOMERS = 10;
 export type ActiveRacer = {
   id: string;
   activatedAt: Date;
+  /** When the window closes. The race cannot be counted past this instant. */
+  endsAt: Date;
   currentCustomerCount: number;
   countReconciledAt: Date | null;
   reachedTenAt: Date | null;
@@ -59,6 +61,8 @@ export type ReconcileOutcome =
       advanced: boolean;
       /** True when this run was the one that reached ten. */
       finished: boolean;
+      /** True when this run was the one that closed an unfinished race. */
+      expired: boolean;
     }
   | { ok: false; racerId: string; reason: ReconcileFailure };
 
@@ -105,9 +109,38 @@ export type ReconcileStore = {
   /** Compare-and-set on `reached_ten_at`, so exactly one run finishes the race. */
   markReachedTen(racerId: string, at: Date): Promise<boolean>;
 
+  /**
+   * The instant the nth customer first paid, or null if there are fewer than n.
+   *
+   * This is what makes `finished_at` true rather than convenient. The moment a
+   * race was won is the moment the tenth customer's money arrived, not the
+   * moment a poller happened to notice — and those can be half an hour apart,
+   * which is exactly the kind of gap a board claiming to record real events
+   * cannot afford to paper over.
+   */
+  nthCustomerPaidAt(racerId: string, n: number): Promise<Date | null>;
+
+  /**
+   * Compare-and-set on the status, so exactly one run expires a race.
+   *
+   * Same shape as `markReachedTen`, and for the same reason: several instances
+   * can see the same elapsed window, and only one of them may write the
+   * transition and announce it.
+   */
+  markExpired(racerId: string): Promise<boolean>;
+
+  /**
+   * Freezes the count and marks the connection broken.
+   *
+   * The count is not touched — it is frozen precisely by leaving it alone. What
+   * changes is the connection, so nothing reads it again until a racer
+   * reconnects, and the public surface can say why it stopped moving.
+   */
+  markConnectionBroken(connectionId: string, errorCode: string): Promise<void>;
+
   recordEvent(input: {
     racerId: string;
-    type: "customer_milestone" | "finished";
+    type: "customer_milestone" | "finished" | "expired" | "connection_lost";
     customerCount: number;
     occurredAt: Date;
   }): Promise<void>;
@@ -166,9 +199,21 @@ export async function reconcileRacer(
       ),
     );
 
+    // The window never runs past the end of the race. A payment taken after the
+    // clock stopped is not a customer of this race, and counting one would let a
+    // founder reach ten on a sale they made the day after they lost.
+    const until = new Date(Math.min(now.getTime(), racer.endsAt.getTime()));
+
+    // Nothing can have been earned in a window that ends before it starts. This
+    // is the expired-race case: `endsAt` is in the past, `since` is the last
+    // reconcile, and the intersection is empty. Skipping the read keeps the
+    // provider call honest rather than asking Stripe for a negative range.
     const payments: ProviderPayment[] = [];
-    for await (const payment of provider.listPayments(asProviderConnection, { since, until: now })) {
-      payments.push(payment);
+
+    if (since.getTime() < until.getTime()) {
+      for await (const payment of provider.listPayments(asProviderConnection, { since, until })) {
+        payments.push(payment);
+      }
     }
 
     await store.recordPayments(racer.id, payments);
@@ -196,19 +241,47 @@ export async function reconcileRacer(
     }
 
     // --- The finish line ----------------------------------------------------
+    //
+    // Reached first, because a race that hit ten keeps its win even if the
+    // window closed before the poller noticed. Ordering these the other way
+    // would expire a race that had already been won.
     let finished = false;
+    let expired = false;
 
     if (customerCount >= TARGET_CUSTOMERS && !racer.reachedTenAt) {
+      // The moment the tenth customer first paid, not the moment we looked.
+      // Falls back to `now` only if the row is unreadable, which would mean the
+      // count and the stored customers disagree — and reporting the win is
+      // still better than reporting nothing.
+      const tenthPaidAt = (await store.nthCustomerPaidAt(racer.id, TARGET_CUSTOMERS)) ?? now;
+
       // Compare-and-set, so exactly one run across the whole fleet is the one
       // that finishes the race and emits the event.
-      finished = await store.markReachedTen(racer.id, now);
+      finished = await store.markReachedTen(racer.id, tenthPaidAt);
 
       if (finished) {
         await store.recordEvent({
           racerId: racer.id,
           type: "finished",
           customerCount,
-          occurredAt: now,
+          // Also the paid-at instant, so the timeline and the race end agree
+          // rather than differing by however long the poll interval was.
+          occurredAt: tenthPaidAt,
+        });
+      }
+    } else if (now.getTime() > racer.endsAt.getTime()) {
+      // The window closed short of ten. Compare-and-set, so exactly one run
+      // writes it — and so a race that finished on the previous branch cannot
+      // be expired by the same pass.
+      expired = await store.markExpired(racer.id);
+
+      if (expired) {
+        await store.recordEvent({
+          racerId: racer.id,
+          type: "expired",
+          customerCount,
+          // The close of the window, not the moment we noticed it had closed.
+          occurredAt: racer.endsAt,
         });
       }
     }
@@ -219,7 +292,7 @@ export async function reconcileRacer(
       errorCode: null,
     });
 
-    return { ok: true, racerId: racer.id, customerCount, advanced, finished };
+    return { ok: true, racerId: racer.id, customerCount, advanced, finished, expired };
   } catch {
     // A fixed category and an id. **Never the error's text.**
     //
@@ -258,6 +331,7 @@ export type ReconcileSummary = {
   reconciled: number;
   advanced: number;
   finished: string[];
+  expired: string[];
   failures: Array<{ racerId: string; reason: ReconcileFailure }>;
 };
 
@@ -298,6 +372,7 @@ export async function reconcileActiveRacers(
     reconciled: 0,
     advanced: 0,
     finished: [],
+    expired: [],
     failures: [],
   };
 
@@ -312,6 +387,7 @@ export async function reconcileActiveRacers(
     summary.reconciled += 1;
     if (outcome.advanced) summary.advanced += 1;
     if (outcome.finished) summary.finished.push(outcome.racerId);
+    if (outcome.expired) summary.expired.push(outcome.racerId);
   }
 
   return summary;
