@@ -689,6 +689,8 @@ export type Database = {
         | "activated"
         | "customer_milestone"
         | "finished"
+        | "expired"
+        | "connection_lost"
       racer_status:
         | "registered"
         | "ready"
@@ -842,6 +844,8 @@ export const Constants = {
         "activated",
         "customer_milestone",
         "finished",
+        "expired",
+        "connection_lost",
       ],
       racer_status: [
         "registered",
