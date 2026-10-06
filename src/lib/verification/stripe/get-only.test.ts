@@ -29,7 +29,17 @@ import { test } from "node:test";
  * the HTTP verbs are checked too.
  */
 
-const CLIENT = "src/lib/verification/stripe/restricted-client.ts";
+/**
+ * Both files that touch Stripe, not just the one the SDK is constructed in.
+ *
+ * The SDK moved to `port.ts` when the probe needed to run the same code without
+ * importing `server-only`. Splitting them is exactly when a mutating call could
+ * slip into whichever half nobody was checking, so both are scanned.
+ */
+const CLIENTS = [
+  "src/lib/verification/stripe/port.ts",
+  "src/lib/verification/stripe/restricted-client.ts",
+];
 
 /** Stripe SDK methods that change state. */
 const WRITE_METHODS = [
@@ -53,27 +63,29 @@ const WRITE_METHODS = [
 const WRITE_VERBS = ['method: "POST"', "method: 'POST'", 'method: "DELETE"', 'method: "PATCH"', 'method: "PUT"'];
 
 test("the Stripe client contains no mutating SDK call", () => {
-  const source = readFileSync(CLIENT, "utf8");
+  for (const file of CLIENTS) {
+    const source = readFileSync(file, "utf8");
+    const found = WRITE_METHODS.filter((method) => source.includes(method));
 
-  const found = WRITE_METHODS.filter((method) => source.includes(method));
-
-  assert.deepEqual(
-    found,
-    [],
-    `the Stripe client calls ${found.join(", ")}. This product may only read a racer's account.`,
-  );
+    assert.deepEqual(
+      found,
+      [],
+      `${file} calls ${found.join(", ")}. This product may only read a racer's account.`,
+    );
+  }
 });
 
 test("the Stripe client issues no mutating HTTP verb", () => {
-  const source = readFileSync(CLIENT, "utf8");
+  for (const file of CLIENTS) {
+    const source = readFileSync(file, "utf8");
+    const found = WRITE_VERBS.filter((verb) => source.includes(verb));
 
-  const found = WRITE_VERBS.filter((verb) => source.includes(verb));
-
-  assert.deepEqual(found, [], `the client issues ${found.join(", ")}`);
+    assert.deepEqual(found, [], `${file} issues ${found.join(", ")}`);
+  }
 });
 
 test("the client is only ever constructed with a credential, never with a platform key", () => {
-  const source = readFileSync(CLIENT, "utf8");
+  const source = readFileSync("src/lib/verification/stripe/port.ts", "utf8");
 
   // `new Stripe(...)` must always be passed the resolved racer key. A second
   // construction with an environment value would be a platform-level client,
