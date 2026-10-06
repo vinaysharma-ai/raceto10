@@ -43,3 +43,7 @@ yarn-error.log*
 # typescript
 *.tsbuildinfo
 next-env.d.ts
+
+# scratch commit-message files; pass messages with git commit -F - instead
+.cmsg.tmp
+*.commit-msg.tmp

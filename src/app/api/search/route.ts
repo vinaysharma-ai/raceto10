@@ -1,35 +1,38 @@
 import { NextResponse } from "next/server";
 
-import { getRaceBoard } from "@/lib/queries/race-board";
-import { racersOnTheBoard, searchRacers } from "@/lib/race/board";
+import { anyRacersOnTheBoard, searchPublicRacers } from "@/lib/queries/race-board";
 
 /**
  * The hero search box's one read.
  *
- * ## Why this reads the board rather than the search view
+ * ## Backed by `public_search`, not by the board
  *
- * `public_search` exists and `searchPublicRacers` already queries it, but it
- * cannot answer the question the box has to answer when it finds nothing: is
- * that because nobody matched, or because nobody is racing yet? Those are
- * different sentences and only one of them is true. Reading the board once
- * answers both — the same list the leaderboard ranks, filtered by the same pure
- * function the leaderboard uses, so the two surfaces cannot disagree.
+ * This used to read the whole race board through `getRaceBoard` and filter it in
+ * process, which worked and was the wrong shape: it moved every racer and twelve
+ * activity rows across the wire to answer a question about at most eight of
+ * them, and the filter lived in JavaScript rather than in the query.
  *
- * The filter is applied in process, not in SQL, because the board is already
- * small enough to hold and `searchRacers` is the exact predicate the
- * leaderboard renders with. Phase 7 moves this onto the `public_search` view
- * with a `limit 8`; until then one cached read is the honest, smallest thing.
+ * `public_search` is the view built for this. It is deliberately narrower than
+ * `public_racers` — no location, no customer count, no timings — so an arbitrary
+ * substring query cannot be used to profile the board without loading it. The
+ * pattern is escaped for both LIKE and PostgREST's own filter grammar by
+ * `buildSearchPattern`, and the view caps the result at eight.
+ *
+ * ## The two empty answers
+ *
+ * A search that finds nothing is either "no match" or "nobody has started a race
+ * yet", and those are different sentences. Only the second one is worth acting
+ * on, and telling somebody the first when the truth is the second sends them
+ * hunting for a spelling mistake. So an empty result costs one more question —
+ * whether the board has anybody on it at all — asked only in that case.
  *
  * ## It never returns an error body
  *
- * A failed read is `ok: false`, and the box turns that into a sentence a person
- * can read. Nothing here echoes a PostgREST message, and nothing throws.
+ * A failed read is reported as `unavailable`, and the box turns that into a
+ * sentence. Nothing here echoes a PostgREST message, and nothing throws.
  */
 
 export const dynamic = "force-dynamic";
-
-/** How many matches the dropdown shows before it stops being a dropdown. */
-const LIMIT = 8;
 
 export type SearchResponse = {
   results: {
@@ -38,8 +41,8 @@ export type SearchResponse = {
     x_handle: string | null;
     product_name: string | null;
   }[];
-  /** Racers actually in a race. Zero means "nobody has started", not "no match". */
-  racing: number;
+  /** Whether anybody is on the board. Null when it could not be determined. */
+  anyoneRacing: boolean | null;
   /** The read failed. Distinct from an empty result. */
   unavailable?: true;
 };
@@ -50,26 +53,23 @@ export async function GET(request: Request): Promise<NextResponse<SearchResponse
   // The box only asks once there are two characters, but a hand-made request
   // can arrive with anything. Below the threshold there is nothing to answer.
   if (query.trim().length < 2) {
-    return NextResponse.json({ results: [], racing: 0 });
+    return NextResponse.json({ results: [], anyoneRacing: null });
   }
 
-  const board = await getRaceBoard();
+  const found = await searchPublicRacers(query);
 
-  if (!board.ok) {
-    return NextResponse.json({ results: [], racing: 0, unavailable: true });
+  if (!found.ok) {
+    return NextResponse.json({ results: [], anyoneRacing: null, unavailable: true });
   }
 
-  const racing = racersOnTheBoard(board.board.racers);
+  if (found.results.length > 0) {
+    return NextResponse.json({ results: found.results, anyoneRacing: true });
+  }
 
+  // Nothing matched. The only question left is whether that is because nobody
+  // is racing, which is a different sentence.
   return NextResponse.json({
-    results: searchRacers(racing, query)
-      .slice(0, LIMIT)
-      .map((racer) => ({
-        public_slug: racer.public_slug,
-        founder_name: racer.founder_name,
-        x_handle: racer.x_handle,
-        product_name: racer.product_name,
-      })),
-    racing: racing.length,
+    results: [],
+    anyoneRacing: await anyRacersOnTheBoard(),
   });
 }

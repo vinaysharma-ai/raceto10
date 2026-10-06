@@ -3,7 +3,7 @@
 import { useCallback, useRef, useState } from "react";
 import Map, { Marker, Popup, type MapRef } from "react-map-gl/mapbox";
 
-import type { ActivityLine, GlobeDot } from "@/lib/race/board";
+import { RACE_TARGET, type ActivityLine, type GlobeDot } from "@/lib/race/board";
 
 import "mapbox-gl/dist/mapbox-gl.css";
 
@@ -216,7 +216,7 @@ export function WorldGlobe({ dots, feed, live, token }: WorldGlobeProps) {
           >
             <button
               type="button"
-              aria-label={`${dot.handle}, ${dot.label}`}
+              aria-label={`${dot.who}${dot.product ? `, ${dot.product}` : ""}, ${dot.count} of ${RACE_TARGET}`}
               className="relative block h-3 w-3 cursor-pointer rounded-full focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-text"
             >
               <span className="live-pulse absolute inset-0 rounded-full bg-text" />
@@ -235,9 +235,18 @@ export function WorldGlobe({ dots, feed, live, token }: WorldGlobeProps) {
             onClose={() => setOpenDot(null)}
             className="[&_.mapboxgl-popup-content]:rounded-sm [&_.mapboxgl-popup-content]:border [&_.mapboxgl-popup-content]:border-border [&_.mapboxgl-popup-content]:bg-surface [&_.mapboxgl-popup-content]:px-3 [&_.mapboxgl-popup-content]:py-2 [&_.mapboxgl-popup-content]:shadow-none [&_.mapboxgl-popup-tip]:border-t-surface"
           >
+            {/* Who, what, and how far. Nothing else — no city, no country, no
+                email, no account. The dot is already a place; repeating it here
+                would be the only other thing this popup could say, and it is the
+                one thing a reader can already see. */}
             <p className="text-small">
-              <span className="text-text">{openDot.handle}</span>
-              <span className="ml-2 text-text-muted">{openDot.label}</span>
+              <span className="text-text">{openDot.who}</span>
+              {openDot.product ? (
+                <span className="ml-2 text-text-muted">{openDot.product}</span>
+              ) : null}
+            </p>
+            <p className="mt-1 text-small text-text-muted">
+              {openDot.count} of {RACE_TARGET}
             </p>
           </Popup>
         ) : null}

@@ -168,7 +168,7 @@ async function supabaseRaceBoardReader(): Promise<RaceBoardReader> {
       db
         .from("public_race_events")
         .select(
-          "event_type, milestone_customer_count, occurred_at, public_slug, founder_name, x_handle, product_name, city, country",
+          "event_type, milestone_customer_count, occurred_at, public_slug, founder_name, x_handle, product_name, city, country, activated_at",
         )
         .order("occurred_at", { ascending: false })
         .limit(limit),
@@ -188,7 +188,10 @@ async function supabaseRaceBoardReader(): Promise<RaceBoardReader> {
             `product_name.ilike.%${pattern}%`,
           ].join(","),
         )
-        .limit(50);
+        // Eight. A dropdown that scrolls is a page, and a page is what
+        // `/leaderboard?q=` already is — this one answers "is anyone doing
+        // this?" without taking over the screen.
+        .limit(8);
     },
   };
 }
@@ -208,5 +211,98 @@ export async function searchPublicRacers(query: string): Promise<SearchResultPag
     return await readSearch(await supabaseRaceBoardReader(), query);
   } catch (error) {
     return { ok: false, reason: (error as Error).message };
+  }
+}
+
+/**
+ * Whether anybody is on the board at all.
+ *
+ * ## Why this is separate from the search
+ *
+ * The search box has to tell two empty results apart: "nobody matches that" and
+ * "nobody has started a race yet". Those are different sentences, and showing
+ * the wrong one sends somebody hunting for a spelling mistake that is not there.
+ *
+ * `head: true` asks PostgREST for the count and no rows, so this returns a
+ * number rather than a list — the answer is a single bit and there is no reason
+ * to move a row to get it. It is only asked when a search found nothing, so the
+ * common case costs one request.
+ */
+/**
+ * One racer's public row, by slug, or null.
+ *
+ * Reads `public_racers`, so consent and non-deletion are applied by the view
+ * rather than by a `where` clause written here. A racer who has not consented,
+ * or whose profile has been deleted, is indistinguishable from one who does not
+ * exist — which is the correct answer for a public page, because "this person
+ * exists but has not agreed to be shown" is itself a fact about them.
+ *
+ * The slug shape is not validated here. An unrecognised slug simply matches no
+ * row, and a page that 404s for every slug it does not have is the same page
+ * whatever the slug looks like.
+ */
+export async function getPublicRacer(slug: string): Promise<PublicRacer | null> {
+  try {
+    const { createClient } = await import("@/lib/supabase/server");
+    const db = await createClient();
+
+    const { data, error } = await db
+      .from("public_racers")
+      .select(
+        "public_slug, founder_name, x_handle, product_name, product_url, status, current_customer_count, activated_at, race_end_at, reached_ten_at, created_at, city, country, latitude, longitude",
+      )
+      .eq("public_slug", slug)
+      .maybeSingle();
+
+    if (error || !data) return null;
+    return data as unknown as PublicRacer;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * A racer's public events, newest first.
+ *
+ * Same view as the globe's overlay, so a racer's own page and the landing feed
+ * cannot disagree about what happened to them.
+ */
+export async function getRacerEvents(slug: string, limit = 20): Promise<ActivityRow[]> {
+  try {
+    const { createClient } = await import("@/lib/supabase/server");
+    const db = await createClient();
+
+    const { data, error } = await db
+      .from("public_race_events")
+      .select(
+        "event_type, milestone_customer_count, occurred_at, public_slug, founder_name, x_handle, product_name, city, country, activated_at",
+      )
+      .eq("public_slug", slug)
+      .order("occurred_at", { ascending: false })
+      .limit(limit);
+
+    if (error || !data) return [];
+    return data as unknown as ActivityRow[];
+  } catch {
+    return [];
+  }
+}
+
+export async function anyRacersOnTheBoard(): Promise<boolean | null> {
+  try {
+    const { createClient } = await import("@/lib/supabase/server");
+    const db = await createClient();
+
+    const { count, error } = await db
+      .from("public_search")
+      .select("public_slug", { count: "exact", head: true });
+
+    if (error) return null;
+    return (count ?? 0) > 0;
+  } catch {
+    // Null, not false. "We could not tell" and "the board is empty" are
+    // different, and the caller must not be told the second when it is the
+    // first.
+    return null;
   }
 }

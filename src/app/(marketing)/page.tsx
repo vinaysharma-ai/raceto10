@@ -1,3 +1,4 @@
+import { AutoRefresh } from "@/components/landing/auto-refresh";
 import { Footer } from "@/components/landing/footer";
 import { Hero } from "@/components/landing/hero";
 import { Nav } from "@/components/landing/nav";
@@ -45,6 +46,12 @@ export default function Home() {
       <Nav />
 
       <main className="flex-1">
+        {/* Renders nothing. Re-reads the server components every minute while
+            the tab is visible, so the count and the feed stay current without
+            a socket and without anything a visitor is looking at being
+            replaced. */}
+        <AutoRefresh />
+
         <Hero />
         <RaceGlobe />
         <WaitlistForm />

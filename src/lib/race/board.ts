@@ -34,6 +34,7 @@ export type PublicRacer = {
   founder_name: string | null;
   x_handle: string | null;
   product_name: string | null;
+  product_url: string | null;
   status: RacerStatus;
   current_customer_count: number;
   activated_at: string | null;
@@ -50,7 +51,9 @@ export type RaceEventType =
   | "joined"
   | "activated"
   | "customer_milestone"
-  | "finished";
+  | "finished"
+  | "expired"
+  | "connection_lost";
 
 /** A row of `public_race_events`. Carries no provider payload and no id. */
 export type ActivityRow = {
@@ -63,6 +66,8 @@ export type ActivityRow = {
   product_name: string | null;
   city: string | null;
   country: string | null;
+  /** The start of the race. Both ends are needed to say how long it took. */
+  activated_at: string | null;
 };
 
 export const RACE_TARGET = 10;
@@ -110,8 +115,12 @@ export function placeLabel(place: {
 export type GlobeDot = {
   slug: string;
   coordinates: [number, number];
-  label: string;
-  handle: string;
+  /** Verified X handle with the `@`, or the display name. Never both. */
+  who: string;
+  /** The product being raced, or null when the founder has not named one. */
+  product: string | null;
+  /** The verified count, out of `RACE_TARGET`. */
+  count: number;
 };
 
 /**
@@ -141,8 +150,13 @@ export function globeDots(racers: PublicRacer[]): GlobeDot[] {
         number,
         number,
       ],
-      label: placeLabel(racer) ?? (racer.x_handle ? `@${racer.x_handle}` : "racer"),
-      handle: racer.x_handle ? `@${racer.x_handle}` : racer.public_slug,
+      // The handle only where X proved it. `public_racers` takes `x_handle` from
+      // the profile, and the only writer is the OAuth callback reading an X
+      // identity — so its presence is the proof. A Google-only founder is named
+      // by their display name rather than by a handle nobody verified.
+      who: racer.x_handle ? `@${racer.x_handle}` : (racer.founder_name ?? racer.public_slug),
+      product: racer.product_name,
+      count: progressOf(racer),
     }));
 }
 
@@ -403,20 +417,52 @@ export function describeActivity(row: ActivityRow): {
 } {
   const where = placeLabel(row);
   const who = row.x_handle ? `@${row.x_handle}` : (row.founder_name ?? row.public_slug);
+  const count = row.milestone_customer_count;
 
-  if (row.event_type === "customer_milestone" && row.milestone_customer_count !== null) {
-    return { who, what: `hit customer #${row.milestone_customer_count}`, where };
+  switch (row.event_type) {
+    case "activated":
+      return { who, what: "started a race", where };
+
+    case "customer_milestone":
+      return count === null
+        ? { who, what: "gained a customer", where }
+        : { who, what: `reached ${count} of ${RACE_TARGET}`, where };
+
+    case "finished": {
+      // How long it took, when both ends of the race are known. Every finished
+      // racer has ten customers, so the time is the only thing that
+      // distinguishes one from another — losing it would make the line say
+      // nothing a reader could not already guess.
+      const took = finishedInMs({
+        activated_at: row.activated_at,
+        reached_ten_at: row.occurred_at,
+      });
+      return {
+        who,
+        what: took === null ? "finished" : `finished in ${formatDuration(took)}`,
+        where,
+      };
+    }
+
+    case "expired":
+      return {
+        who,
+        what:
+          count === null
+            ? "ran out of time"
+            : `ran out of time at ${count} of ${RACE_TARGET}`,
+        where,
+      };
+
+    case "connection_lost":
+      return { who, what: "connection was lost", where };
+
+    case "joined":
+      // Never shown. Registering is not an event in a race — nothing has
+      // happened yet, and a feed that opens with people arriving rather than
+      // people doing things reads as a signup counter.
+      return { who, what: "joined", where };
   }
-
-  if (row.event_type === "finished") {
-    return { who, what: `reached ${RACE_TARGET} customers`, where };
-  }
-
-  if (row.event_type === "activated") {
-    return { who, what: "started racing", where };
-  }
-
-  return { who, what: "joined", where };
 }
 
 /** One rendered line of the feed that floats over the map. */
@@ -455,9 +501,16 @@ export function activityLines(
   });
 }
 
-/** Newest first, and never more than the caller asked for. */
+/**
+ * Newest first, and never more than the caller asked for.
+ *
+ * `joined` is dropped here rather than in the renderer, so the limit counts
+ * events worth reading. Filtering afterwards would let a busy signup day fill
+ * all eight slots with arrivals and push out every actual race event.
+ */
 export function recentActivity(rows: ActivityRow[], limit: number): ActivityRow[] {
-  return [...rows]
+  return rows
+    .filter((row) => row.event_type !== "joined")
     .sort((a, b) => Date.parse(b.occurred_at) - Date.parse(a.occurred_at))
     .slice(0, Math.max(0, limit));
 }

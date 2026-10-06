@@ -593,6 +593,7 @@ export type Database = {
     Views: {
       public_race_events: {
         Row: {
+          activated_at: string | null
           city: string | null
           country: string | null
           event_type: Database["public"]["Enums"]["race_event_type"] | null

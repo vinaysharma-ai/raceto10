@@ -30,6 +30,7 @@ function racer(overrides: Partial<PublicRacer> = {}): PublicRacer {
     founder_name: "Ada Lovelace",
     x_handle: "ada",
     product_name: "Ledgerly",
+    product_url: "https://ledgerly.example.com",
     status: "racing",
     current_customer_count: 0,
     activated_at: "2026-09-28T10:00:00.000Z",
@@ -81,7 +82,19 @@ test("a racer with coordinates gets a dot at their location", () => {
   // would put every European founder in the Indian Ocean.
   assert.deepEqual(dots[0].coordinates, [-9.1333, 38.7167]);
   assert.equal(dots[0].slug, "ada");
-  assert.equal(dots[0].label, "Lisbon, Portugal");
+  // Who, what and how far. The location is the dot's position, not a label —
+  // repeating it in the popup was the only other thing it could have said.
+  assert.equal(dots[0].who, "@ada");
+  assert.equal(dots[0].product, "Ledgerly");
+  assert.equal(dots[0].count, 0);
+});
+
+test("a dot with no verified handle is named by display name, not by a slug", () => {
+  // A Google-only founder has no handle, and inventing one from the slug would
+  // publish a name nobody proved they own.
+  const dots = globeDots([racer({ x_handle: null })]);
+
+  assert.equal(dots[0].who, "Ada Lovelace");
 });
 
 test("a racer with no coordinates gets no dot, and none is invented", () => {
@@ -241,6 +254,7 @@ function activity(overrides: Partial<ActivityRow> = {}): ActivityRow {
     product_name: "Ledgerly",
     city: "Lisbon",
     country: "PT",
+    activated_at: "2026-09-28T08:00:00.000Z",
     ...overrides,
   };
 }
@@ -248,14 +262,52 @@ function activity(overrides: Partial<ActivityRow> = {}): ActivityRow {
 test("a milestone names the customer number", () => {
   const line = describeActivity(activity());
   assert.equal(line.who, "@ada");
-  assert.equal(line.what, "hit customer #4");
+  assert.equal(line.what, "reached 4 of 10");
   assert.equal(line.where, "Lisbon, Portugal");
 });
 
 test("every event type reads differently", () => {
   assert.equal(describeActivity(activity({ event_type: "joined" })).what, "joined");
-  assert.equal(describeActivity(activity({ event_type: "activated" })).what, "started racing");
-  assert.equal(describeActivity(activity({ event_type: "finished" })).what, "reached 10 customers");
+  assert.equal(describeActivity(activity({ event_type: "activated" })).what, "started a race");
+  assert.equal(
+    describeActivity(activity({ event_type: "expired", milestone_customer_count: 6 })).what,
+    "ran out of time at 6 of 10",
+  );
+  assert.equal(
+    describeActivity(activity({ event_type: "connection_lost" })).what,
+    "connection was lost",
+  );
+});
+
+test("a finished race says how long it took", () => {
+  // Every finished racer has ten customers, so the time is the only thing that
+  // distinguishes one from another.
+  const line = describeActivity(activity({ event_type: "finished" }));
+
+  assert.match(line.what, /^finished in 3h/, line.what);
+});
+
+test("a finished event with no start time still reads, without inventing one", () => {
+  // `activated_at` is null for a row written before the column existed. Saying
+  // just "finished" is honest; a made-up duration would not be.
+  const line = describeActivity(activity({ event_type: "finished", activated_at: null }));
+
+  assert.equal(line.what, "finished");
+});
+
+test("joined is never part of the feed, however recent it is", () => {
+  // Registering is not an event in a race — nothing has happened yet. Filtered
+  // before the limit, so a busy signup day cannot push real events out of the
+  // eight slots.
+  const rows = Array.from({ length: 10 }, (_, i) =>
+    activity({
+      event_type: "joined",
+      public_slug: `p${i}`,
+      occurred_at: `2026-09-28T11:0${i}:00.000Z`,
+    }),
+  );
+
+  assert.deepEqual(recentActivity(rows, 8), []);
 });
 
 test("a milestone with no number does not print `#null`", () => {

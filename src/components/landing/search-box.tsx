@@ -45,7 +45,13 @@ type Result = {
 
 type SearchResponse = {
   results: Result[];
-  racing: number;
+  /**
+   * Whether anybody is on the board at all.
+   *
+   * `false` and `null` mean different things and get different sentences:
+   * `false` is "nobody has started a race yet", `null` is "we could not tell".
+   */
+  anyoneRacing: boolean | null;
   unavailable?: true;
 };
 
@@ -104,9 +110,14 @@ export function SearchBox({ className }: { className?: string }) {
             ? { kind: "unavailable" }
             : body.results.length > 0
               ? { kind: "results", results: body.results }
-              : body.racing === 0
+              : body.anyoneRacing === false
                 ? { kind: "none-racing" }
-                : { kind: "no-match" },
+                : // Null means the count could not be read, which is not the same
+                  // as an empty board. Saying "no match" there would be a claim
+                  // we cannot support; saying "unavailable" is the truth.
+                  body.anyoneRacing === null
+                  ? { kind: "unavailable" }
+                  : { kind: "no-match" },
         });
       } catch (error) {
         // An aborted request is this component replacing its own question, not
