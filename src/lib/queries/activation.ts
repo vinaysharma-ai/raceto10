@@ -179,6 +179,56 @@ export function activationStore(racerId?: string): ActivationStore {
       if (error) throw new Error(error.message);
     },
 
+    /**
+     * What the start email needs about a racer.
+     *
+     * The address comes from `profiles`, not from `racer`: it is the signed-in
+     * person's, and `racer` has never held one. A racer whose profile has no
+     * address gets null and is skipped — X sign-ins often carry none, and the
+     * profile step is what asks for one.
+     */
+    async loadEmailContext(racerId) {
+      const { createAdminClient } = await import("@/lib/supabase/admin");
+      const db = createAdminClient();
+
+      const { data } = await db
+        .from("racer")
+        .select("product_name, public_slug, race_end_at, email_sent_at, profiles(email)")
+        .eq("id", racerId)
+        .maybeSingle();
+
+      if (!data) return null;
+
+      const profile = data.profiles as { email: string | null } | null;
+
+      return {
+        email: profile?.email ?? null,
+        productName: data.product_name,
+        publicSlug: data.public_slug,
+        raceEndAt: data.race_end_at ? new Date(data.race_end_at) : null,
+        emailSentAt: data.email_sent_at ? new Date(data.email_sent_at) : null,
+      };
+    },
+
+    /**
+     * Records that the email went.
+     *
+     * Called only on a successful send. A failure or a skip leaves the column
+     * null, which is the retry state — writing a failure marker instead would
+     * mean the racer never receives it even after the provider is configured.
+     */
+    async markEmailSent(racerId, at) {
+      const { createAdminClient } = await import("@/lib/supabase/admin");
+      const db = createAdminClient();
+
+      const { error } = await db
+        .from("racer")
+        .update({ email_sent_at: at.toISOString() })
+        .eq("id", racerId);
+
+      if (error) throw new Error(error.message);
+    },
+
     raceDurationDays: getRaceDuration,
 
     /**

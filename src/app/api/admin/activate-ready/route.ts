@@ -1,5 +1,7 @@
-import { NextResponse, type NextRequest } from "next/server";
+﻿import { NextResponse, type NextRequest } from "next/server";
 
+import { postToResend, sendStartEmail } from "@/lib/email/start-email.ts";
+import { env } from "@/lib/env";
 import { cronEnv } from "@/lib/env.server";
 import { activationStore, readyRacerIds } from "@/lib/queries/activation";
 import { activateRacer } from "@/lib/race/activate.ts";
@@ -35,7 +37,7 @@ import { secretsMatch } from "@/lib/vault/crypto.ts";
  * ## Consent is checked, and is not a form field here
  *
  * `activateRacer` takes the consent flag as an argument because the profile step
- * is where the founder agreed to race in public. The batch passes `true` — not
+ * is where the founder agreed to race in public. The batch passes `true` â€” not
  * as a bypass, but because the agreement was recorded at registration and this
  * endpoint has no business asking a second time. A racer who never consented has
  * no `public_consent_at`, and `beginActivation` writes that timestamp from the
@@ -43,6 +45,64 @@ import { secretsMatch } from "@/lib/vault/crypto.ts";
  */
 
 export const dynamic = "force-dynamic";
+
+/**
+ * Sends the start email, or reports why it did not.
+ *
+ * Returns a category and never throws, because the caller has already started a
+ * race and nothing here is allowed to change that. `email_sent_at` is written
+ * only on success, so a skipped or failed attempt is retried by the next batch
+ * run â€” which is only true because the run that skipped it left the column
+ * alone.
+ *
+ * A racer who was already emailed is not emailed again. That is what stops a
+ * batch re-run from sending the same founder the same message every time the
+ * owner runs it.
+ */
+async function tryStartEmail(
+  store: ReturnType<typeof activationStore>,
+  racerId: string,
+): Promise<"sent" | "skipped" | "failed" | "already"> {
+  try {
+    const context = await store.loadEmailContext(racerId);
+    if (!context) return "failed";
+
+    // Already sent on an earlier run. Not an error and not a skip.
+    if (context.emailSentAt) return "already";
+
+    const outcome = await sendStartEmail(
+      { post: postToResend, env: process.env },
+      {
+        to: context.email,
+        productName: context.productName,
+        daysLeft: context.raceEndAt ? daysUntil(context.raceEndAt, new Date()) : null,
+        publicUrl: context.publicSlug
+          ? new URL(`/r/${context.publicSlug}`, env.NEXT_PUBLIC_APP_URL).toString()
+          : null,
+      },
+    );
+
+    if (outcome.status === "sent") {
+      await store.markEmailSent(racerId, new Date());
+      return "sent";
+    }
+
+    if (outcome.status === "failed") {
+      // The category only. Resend's body echoes the recipient address.
+      console.error("[email] start email failed", { code: outcome.reason });
+    }
+
+    return outcome.status;
+  } catch {
+    console.error("[email] start email threw", { code: "storage_error" });
+    return "failed";
+  }
+}
+
+/** Whole days remaining, floored. */
+function daysUntil(end: Date, now: Date): number {
+  return Math.max(0, Math.floor((end.getTime() - now.getTime()) / 86_400_000));
+}
 
 /** Bound on a single invocation, so a slow provider cannot hang the batch. */
 export const maxDuration = 300;
@@ -67,14 +127,19 @@ export async function POST(request: NextRequest) {
 
     const skipped: { id: string; reason: string }[] = [];
     let activated = 0;
+    let emailed = 0;
+    let emailSkipped = 0;
+    let emailFailed = 0;
 
     for (const racerId of ids) {
       try {
+        // Scoped to this racer: the batch has no session, and a store that
+        // resolved the racer from one would activate whoever happened to be
+        // signed in â€” or nobody.
+        const store = activationStore(racerId);
+
         const outcome = await activateRacer(
-          // Scoped to this racer: the batch has no session, and a store that
-          // resolved the racer from one would activate whoever happened to be
-          // signed in — or nobody.
-          activationStore(racerId),
+          store,
           // A factory, so every credential resolution is still scoped to the
           // racer it belongs to.
           stripeRestrictedProvider({ racerId }),
@@ -83,6 +148,16 @@ export async function POST(request: NextRequest) {
 
         if (outcome.ok) {
           activated += 1;
+
+          // --- The start email, after the clock is running ----------------
+          //
+          // Deliberately after, and deliberately unable to affect the outcome.
+          // `beginActivation` has already committed; an email that fails must
+          // not turn a started race into a reported failure.
+          const email = await tryStartEmail(store, racerId);
+          if (email === "sent") emailed += 1;
+          else if (email === "skipped") emailSkipped += 1;
+          else if (email === "failed") emailFailed += 1;
         } else {
           // Named, not counted. An owner running this needs to know which
           // founder is stuck and why, and the reason is already a category
@@ -97,10 +172,13 @@ export async function POST(request: NextRequest) {
       }
     }
 
-    // The email is Phase 8 and nothing sends yet, so nothing can have failed.
-    // The field is here because the shape is the contract the owner's script
-    // reads, and it is honest at zero: zero attempts, zero failures.
-    return NextResponse.json({ activated, skipped, emailFailed: 0 });
+    return NextResponse.json({
+      activated,
+      skipped,
+      emailed,
+      emailSkipped,
+      emailFailed,
+    });
   } catch {
     console.error("[admin] activation batch failed", { code: "failed" });
     return NextResponse.json({ error: "failed" }, { status: 500 });

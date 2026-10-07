@@ -129,6 +129,31 @@ export type ActivationStore = {
   deleteCredential(racerId: string): Promise<void>;
 
   /**
+   * What the start email needs, or null.
+   *
+   * The address comes from `profiles`, not from the racer: `racer` has never
+   * held one. A racer with no address has not finished registering, and the
+   * caller skips rather than failing.
+   */
+  loadEmailContext(racerId: string): Promise<{
+    email: string | null;
+    productName: string | null;
+    publicSlug: string | null;
+    raceEndAt: Date | null;
+    /** Null means not yet sent, so the next run retries. */
+    emailSentAt: Date | null;
+  } | null>;
+
+  /**
+   * Records a successful send.
+   *
+   * Called only on success. A failure or a skip leaves the column null, which is
+   * what makes the retry possible — a failure marker would mean the racer never
+   * receives it even once a provider is configured.
+   */
+  markEmailSent(racerId: string, at: Date): Promise<void>;
+
+  /**
    * The racer's provider connection, if any.
    *
    * `accountId` is carried because the Connect adapter reads against it with a

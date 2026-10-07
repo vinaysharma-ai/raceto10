@@ -287,6 +287,7 @@ export type Database = {
           country: string | null
           created_at: string
           current_customer_count: number
+          email_sent_at: string | null
           id: string
           latitude: number | null
           longitude: number | null
@@ -308,6 +309,7 @@ export type Database = {
           country?: string | null
           created_at?: string
           current_customer_count?: number
+          email_sent_at?: string | null
           id?: string
           latitude?: number | null
           longitude?: number | null
@@ -329,6 +331,7 @@ export type Database = {
           country?: string | null
           created_at?: string
           current_customer_count?: number
+          email_sent_at?: string | null
           id?: string
           latitude?: number | null
           longitude?: number | null

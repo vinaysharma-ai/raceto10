@@ -101,6 +101,13 @@ function fakeStore(
     async deleteCredential(racerId) {
       log("deleteCredential", racerId);
     },
+    async loadEmailContext(racerId) {
+      log("loadEmailContext", racerId);
+      return null;
+    },
+    async markEmailSent(racerId, at) {
+      log("markEmailSent", racerId, at);
+    },
     async recordActivationEvent(input) {
       log("recordActivationEvent", input);
     },
