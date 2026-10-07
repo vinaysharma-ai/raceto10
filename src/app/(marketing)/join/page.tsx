@@ -79,6 +79,10 @@ const PROBLEMS: Record<string, string> = {
   signin_failed: "Sign-in didn't complete. Nothing was saved. Try again.",
   declined: "You cancelled at the sign-in screen. Nothing was shared.",
   link_failed: "That account couldn't be linked. It may already be connected.",
+  // The sign-in rate limit. No wait is carried in the URL, so the sentence does
+  // not name a number it cannot know — and "a little while" is what is actually
+  // true from where the reader is standing.
+  too_many: "That is a lot of sign-in attempts from this address. Wait a little while and try again.",
 };
 
 /** Rendered on the server, so the format is fixed rather than locale-dependent. */

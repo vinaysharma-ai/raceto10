@@ -50,6 +50,20 @@ export const RULES = {
     limit: 5,
     windowMs: 60 * 60 * 1000,
   },
+  /**
+   * Twenty sign-in starts per IP per hour.
+   *
+   * The loosest of the three, and deliberately so. Starting a sign-in is not
+   * expensive — no third-party call, no key, no write — and it is the step a
+   * real person repeats when they mistype a password, pick the wrong account, or
+   * come back on a second device. The bucket exists to bound a script that
+   * drives the OAuth provider, not to ration a human.
+   */
+  signinStart: {
+    bucket: "signin_start",
+    limit: 20,
+    windowMs: 60 * 60 * 1000,
+  },
 } as const satisfies Record<string, RateLimitRule>;
 
 export type RuleName = keyof typeof RULES;

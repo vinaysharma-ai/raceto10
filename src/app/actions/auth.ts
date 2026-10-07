@@ -1,8 +1,11 @@
 "use server";
 
+import { headers } from "next/headers";
 import { redirect } from "next/navigation";
 
 import { env } from "@/lib/env";
+import { clientIp } from "@/lib/geo";
+import { consume } from "@/lib/queries/rate-limit";
 
 /**
  * Starting and ending a session.
@@ -52,6 +55,29 @@ function callbackUrl(next: string): string {
  * than a silent no-op.
  */
 export async function signIn(provider: SignInProvider, next = "/join"): Promise<void> {
+  // --- The rate limit ------------------------------------------------------
+  //
+  // Per IP, because this runs before there is a session to key on. Twenty an
+  // hour, which is far above what a person does and far below what a script
+  // driving the provider needs.
+  //
+  // Fails OPEN, unlike key verification. The operation behind this is a redirect
+  // to a provider, not a call to somebody else's paid API, and a database
+  // problem should not be the reason nobody can sign in — which would be a
+  // worse outage than the one the limit exists to prevent.
+  //
+  // Refused by redirecting to a fixed reason, which `/join` maps to a sentence.
+  // The wait is not carried in the URL: the parameter would be server text
+  // reflected into a page, and a fixed sentence is honest without being a
+  // channel. `PROBLEMS.too_many` is the wording.
+  const limit = await consume("signinStart", clientIp(await headers()), {
+    failClosed: false,
+  });
+
+  if (!limit.allowed) {
+    redirect("/join?error=too_many");
+  }
+
   const { createClient } = await import("@/lib/supabase/server");
   const supabase = await createClient();
 
