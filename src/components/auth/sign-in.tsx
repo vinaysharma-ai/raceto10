@@ -1,9 +1,10 @@
 "use client";
 
-import { useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
+import { useFormStatus } from "react-dom";
 
 import { signIn } from "@/app/actions/auth";
-import type { ProviderAvailability } from "@/lib/auth/providers";
+import type { ProviderAvailability, SignInProvider } from "@/lib/auth/providers";
 import { Button } from "@/components/ui/button";
 
 /**
@@ -36,6 +37,25 @@ import { Button } from "@/components/ui/button";
  * while the JavaScript is still loading; the pending state is the only part
  * that needs it.
  *
+ * ## Why the pending state has to be able to end
+ *
+ * A pending state with no exit is a dead page. Two ways this one used to get
+ * there, both of which look identical to a founder:
+ *
+ * - The action settles without leaving. A failed start redirects to
+ *   `/join?error=…`, which is a *client-side* navigation to the page already on
+ *   screen, so React reconciles this component in place and keeps its state —
+ *   the button stays on `Redirecting...` with both buttons disabled. `?error=`
+ *   is then a sentence nobody can act on, because there is nothing to press.
+ * - The document comes back from the browser's back/forward cache. A founder
+ *   who approves at the provider and then presses Back gets the previous
+ *   document restored exactly as it was left, pending state included.
+ *
+ * So the flag is cleared on both: when the action settles with this page still
+ * mounted, and when the document is restored rather than freshly loaded. A
+ * sign-in that really is in flight is unaffected — the browser leaves for the
+ * provider and this component unmounts.
+ *
  * No provider logos. They would be the only images on the site, they carry
  * trademark conditions, and the labels already say which is which.
  */
@@ -49,46 +69,101 @@ export function SignInButtons({
   next?: string;
   available: ProviderAvailability;
 }) {
-  const [chosen, setChosen] = useState<string | null>(null);
+  const [chosen, setChosen] = useState<SignInProvider | null>(null);
 
-  const label = (provider: "google" | "x", name: string, usable: boolean) => {
-    if (chosen === provider) return "Redirecting...";
-    if (!usable) return UNAVAILABLE;
-    return name;
-  };
+  const clear = useCallback(() => setChosen(null), []);
+
+  // `persisted` is the browser saying it handed back a cached document rather
+  // than loading the page, so nothing is in flight and nothing should look like
+  // it is.
+  useEffect(() => {
+    const onPageShow = (event: PageTransitionEvent) => {
+      if (event.persisted) clear();
+    };
+    window.addEventListener("pageshow", onPageShow);
+    return () => window.removeEventListener("pageshow", onPageShow);
+  }, [clear]);
 
   return (
     <div className="flex flex-col gap-3 sm:flex-row">
       <form action={signIn.bind(null, "google", next)}>
-        <Button
-          type="submit"
-          className="w-full sm:w-auto"
-          disabled={chosen !== null || !available.google}
-          aria-label={
-            available.google
-              ? "Continue with Google"
-              : "Continue with Google, unavailable right now"
-          }
-          onClick={() => setChosen("google")}
-        >
-          {label("google", "Continue with Google", available.google)}
-        </Button>
+        <SubmitButton
+          provider="google"
+          name="Continue with Google"
+          usable={available.google}
+          chosen={chosen}
+          onChoose={() => setChosen("google")}
+          onSettled={clear}
+        />
       </form>
 
       <form action={signIn.bind(null, "x", next)}>
-        <Button
-          type="submit"
+        <SubmitButton
+          provider="x"
+          name="Continue with X"
           variant="secondary"
-          className="w-full sm:w-auto"
-          disabled={chosen !== null || !available.x}
-          aria-label={
-            available.x ? "Continue with X" : "Continue with X, unavailable right now"
-          }
-          onClick={() => setChosen("x")}
-        >
-          {label("x", "Continue with X", available.x)}
-        </Button>
+          usable={available.x}
+          chosen={chosen}
+          onChoose={() => setChosen("x")}
+          onSettled={clear}
+        />
       </form>
     </div>
+  );
+}
+
+/**
+ * One provider's button, rendered inside its own form so `useFormStatus` reports
+ * on that form's action rather than on whichever one happens to be nearest.
+ *
+ * `chosen` is passed down rather than owned here because pressing either button
+ * has to disable both.
+ */
+function SubmitButton({
+  provider,
+  name,
+  variant = "primary",
+  usable,
+  chosen,
+  onChoose,
+  onSettled,
+}: {
+  provider: SignInProvider;
+  name: string;
+  variant?: "primary" | "secondary";
+  usable: boolean;
+  chosen: SignInProvider | null;
+  onChoose: () => void;
+  onSettled: () => void;
+}) {
+  const { pending } = useFormStatus();
+  const seenPending = useRef(false);
+
+  useEffect(() => {
+    if (pending) {
+      seenPending.current = true;
+      return;
+    }
+    // The action ran, finished, and this page is still mounted — so it settled
+    // here rather than navigating to the provider. `seenPending` is what keeps
+    // the first render, where the flag is already false, from clearing a
+    // pending state that has only just been set.
+    if (seenPending.current) {
+      seenPending.current = false;
+      onSettled();
+    }
+  }, [pending, onSettled]);
+
+  return (
+    <Button
+      type="submit"
+      variant={variant}
+      className="w-full sm:w-auto"
+      disabled={chosen !== null || !usable}
+      aria-label={usable ? name : `${name}, unavailable right now`}
+      onClick={onChoose}
+    >
+      {chosen === provider ? "Redirecting..." : usable ? name : UNAVAILABLE}
+    </Button>
   );
 }

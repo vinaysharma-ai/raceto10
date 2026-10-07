@@ -64,11 +64,25 @@ export async function enabledProviders(): Promise<ProviderAvailability> {
 
     const map = external as Record<string, unknown>;
 
+    // Only an explicit `false` disables a button. Anything else — a missing key,
+    // a string, a null — is not the project saying the provider is off, and
+    // treating it as one is what broke the X button.
+    //
+    // `external` carries the id of the provider as Supabase's *authorize*
+    // endpoint spells it, and that is the only id worth reading here. For X that
+    // id is `x`; the `twitter` key in the same map belongs to the deprecated
+    // OAuth 1.0a provider, which the dashboard shows disabled while the OAuth
+    // 2.0 provider is on and working. Reading `twitter` would disable a button
+    // for a provider that signs people in, which is the same mistake in the
+    // opposite direction.
+    //
+    // The cost of a wrong "available" is one sentence from the callback. The
+    // cost of a wrong "unavailable" is a dead end nobody can argue with.
+    const off = (value: unknown) => value === false;
+
     return {
-      // Strictly `=== true`. A missing key, a string, or anything else is not a
-      // promise that the provider works.
-      google: map.google === true,
-      x: map.x === true,
+      google: !off(map.google),
+      x: !off(map.x),
     };
   } catch {
     return ASSUME_AVAILABLE;
