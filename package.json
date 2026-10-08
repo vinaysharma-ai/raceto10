@@ -12,6 +12,7 @@
     "activate": "node scripts/call-cron.mjs /api/admin/activate-ready",
     "fixture:cleanup": "node scripts/fixture-cleanup.mjs",
     "check:public": "node scripts/check-public.mjs",
+    "preflight": "node scripts/preflight.mjs",
     "stripe:probe": "node scripts/stripe-probe.ts"
   },
   "dependencies": {
