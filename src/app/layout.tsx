@@ -37,9 +37,9 @@ export const metadata: Metadata = {
     description: HEADLINE,
   },
   twitter: {
-    // `summary` rather than `summary_large_image`: there is no card image, and
-    // asking for the large one would have every platform draw an empty box.
-    card: "summary",
+    // The large card, because there is now an image to fill it —
+    // `src/app/opengraph-image.tsx`, and a per-racer one under `/r/[handle]`.
+    card: "summary_large_image",
     title: HEADLINE,
     description: HEADLINE,
   },

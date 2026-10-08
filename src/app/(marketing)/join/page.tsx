@@ -6,6 +6,7 @@ import { signOut } from "@/app/actions/auth";
 import { disconnectStripe } from "@/app/actions/provider";
 import { ProfileForm } from "@/components/auth/profile-form";
 import { SignInButtons } from "@/components/auth/sign-in";
+import { ShareOnX } from "@/components/share/share-on-x";
 import { ActivateForm } from "@/components/join/activate-form";
 import { StripeConnectForm } from "@/components/join/stripe-connect-form";
 import { Footer } from "@/components/landing/footer";
@@ -17,6 +18,7 @@ import { JOIN_CLOSED_BODY, JOIN_CLOSED_TITLE, joinOpen } from "@/lib/join/gate.t
 import { allowSelfStart } from "@/lib/env.server";
 import { getJoinState } from "@/lib/queries/join-state";
 import { describeDuration } from "@/lib/race/config";
+import { raceShareText, racerPageUrl } from "@/lib/share";
 import { describeIneligibility } from "@/lib/verification/eligibility.ts";
 
 /**
@@ -372,10 +374,23 @@ async function JoinStage({ error }: { error?: string }) {
               count can be up to half an hour behind.
             </p>
 
-            <div className="mt-6">
+            <div className="mt-6 flex flex-wrap items-center gap-x-6 gap-y-3">
               <Link href="/leaderboard" className="text-small text-text underline">
                 See the public board
               </Link>
+              {/* Says the same number the panel above says, from the same
+                  field: a founder sharing a figure they can see on screen must
+                  not be sharing a different one. Absent when the racer has no
+                  public slug — there would be no page to send anyone to. */}
+              {state.race.publicSlug ? (
+                <ShareOnX
+                  text={raceShareText(
+                    state.race.productName ?? state.race.publicSlug,
+                    state.race.currentCustomerCount,
+                  )}
+                  url={racerPageUrl(state.race.publicSlug)}
+                />
+              ) : null}
             </div>
 
             {state.connection && state.connection.status !== "connected" ? (

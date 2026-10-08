@@ -37,6 +37,21 @@ export type JoinConnection = {
 
 export type JoinRace = {
   status: string;
+  /**
+   * The racer's public page, so a founder can share their own race — or null,
+   * when the row has no slug.
+   *
+   * Not private data: it is the address of a page anybody can already read. It
+   * is carried here rather than looked up again because the founder's own view
+   * and the public page must agree on which race is being shared.
+   *
+   * Null is a real state, not a typing inconvenience. Sharing is offered only
+   * when there is something to share; a link to `/r/null` would be worse than
+   * no link at all.
+   */
+  publicSlug: string | null;
+  /** The product being raced, so a share names it rather than the founder. */
+  productName: string | null;
   activatedAt: Date;
   raceEndAt: Date;
   /** The verified count captured at activation. */
@@ -71,7 +86,7 @@ export async function getJoinState(): Promise<JoinView> {
   const { data: racer } = await db
     .from("racer")
     .select(
-      "id, status, product_name, activated_at, race_end_at, baseline_customer_count, current_customer_count, count_reconciled_at",
+      "id, status, public_slug, product_name, activated_at, race_end_at, baseline_customer_count, current_customer_count, count_reconciled_at",
     )
     .eq("profile_id", profile.id)
     .maybeSingle();
@@ -113,6 +128,8 @@ export async function getJoinState(): Promise<JoinView> {
   if (racer.activated_at && racer.race_end_at) {
     const race: JoinRace = {
       status: racer.status,
+      publicSlug: racer.public_slug,
+      productName: racer.product_name,
       activatedAt: new Date(racer.activated_at),
       raceEndAt: new Date(racer.race_end_at),
       baselineCustomerCount: racer.baseline_customer_count ?? 0,

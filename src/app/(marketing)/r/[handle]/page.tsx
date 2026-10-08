@@ -4,8 +4,10 @@ import { notFound } from "next/navigation";
 
 import { Footer } from "@/components/landing/footer";
 import { Nav } from "@/components/landing/nav";
+import { ShareOnX } from "@/components/share/share-on-x";
 import { SponsorRails } from "@/components/sponsors/sponsor-rails";
 import { getPublicRacer, getRacerEvents } from "@/lib/queries/race-board";
+import { raceShareText, racerPageUrl } from "@/lib/share";
 import {
   RACE_TARGET,
   describeActivity,
@@ -61,11 +63,16 @@ export async function generateMetadata({
   if (!racer) return { title: "Not found" };
 
   const who = racer.x_handle ? `@${racer.x_handle}` : (racer.founder_name ?? handle);
-  const product = racer.product_name ? ` racing ${racer.product_name}` : "";
+  const name = racer.product_name ?? who;
+  const count = progressOf(racer);
 
+  // The product name leads, because it is what a reader recognises in a tab and
+  // in a link preview; the founder's handle is what they search for. Every
+  // field here is a column of `public_racers`, so no metadata can carry
+  // something the page itself would not show.
   return {
-    title: `${who} on RaceTo10`,
-    description: `${who}${product}, racing to ${RACE_TARGET} paying customers in public.`,
+    title: `${name}: ${count} of ${RACE_TARGET} on raceto10`,
+    description: `${racer.product_name ? `${racer.product_name}, by ` : ""}${who} — ${count} of ${RACE_TARGET} paying customers, in public on raceto10.`,
   };
 }
 
@@ -80,6 +87,10 @@ export default async function RacerPage({ params }: { params: Promise<Params> })
   const remaining = timeRemaining(racer);
   const finished = finishedLabel(racer);
   const now = new Date();
+
+  // The same fallback the metadata uses, so a shared card and the sentence in
+  // it cannot name the founder differently.
+  const who = racer.x_handle ? `@${racer.x_handle}` : (racer.founder_name ?? racer.public_slug);
 
   return (
     <div className="has-sponsors flex flex-1 flex-col">
@@ -178,7 +189,11 @@ export default async function RacerPage({ params }: { params: Promise<Params> })
           )}
         </section>
 
-        <div className="mt-10">
+        <div className="mt-10 flex flex-wrap items-center gap-x-6 gap-y-3">
+          <ShareOnX
+            text={raceShareText(racer.product_name ?? who, progress)}
+            url={racerPageUrl(racer.public_slug)}
+          />
           <Link
             href="/leaderboard"
             className="text-small text-text-muted underline-offset-4 transition-colors hover:text-text hover:underline"
