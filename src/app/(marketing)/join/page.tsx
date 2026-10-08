@@ -74,15 +74,16 @@ export const metadata: Metadata = {
  * `signin_failed` is the catch-all and the one the callback uses for every
  * failure to establish a session — a refused code, an expired one, a profile
  * that could not be created. It says nothing was saved because nothing was.
+ *
+ * Only `/auth/callback` writes these. The two that used to be here are gone
+ * with the server action that produced them: the rate limit is answered to the
+ * button that asked (see `src/components/auth/sign-in.tsx`), and linking a
+ * second provider to an existing account went with the action, so nothing can
+ * reach this page saying `too_many` or `link_failed`.
  */
 const PROBLEMS: Record<string, string> = {
   signin_failed: "Sign-in didn't complete. Nothing was saved. Try again.",
   declined: "You cancelled at the sign-in screen. Nothing was shared.",
-  link_failed: "That account couldn't be linked. It may already be connected.",
-  // The sign-in rate limit. No wait is carried in the URL, so the sentence does
-  // not name a number it cannot know — and "a little while" is what is actually
-  // true from where the reader is standing.
-  too_many: "That is a lot of sign-in attempts from this address. Wait a little while and try again.",
 };
 
 /** Rendered on the server, so the format is fixed rather than locale-dependent. */

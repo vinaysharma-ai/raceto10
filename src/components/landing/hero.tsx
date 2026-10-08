@@ -2,13 +2,15 @@ import { Suspense } from "react";
 
 import { SearchBox } from "@/components/landing/search-box";
 import { ButtonLink } from "@/components/ui/button";
+import { HEADLINE } from "@/lib/headline";
 import { getRaceBoard } from "@/lib/queries/race-board";
 import { racersOnTheBoard } from "@/lib/race/board";
 
 /**
  * Hero.
  *
- * The headline and subline are locked copy, reproduced verbatim. The subline
+ * The headline and subline are locked copy. The headline is imported rather
+ * than typed here so that it and the page title cannot drift apart. The subline
  * names Stripe because Stripe is the only processor actually wired — the
  * correction pass was explicit that the copy must not imply a choice the
  * product does not offer yet.
@@ -62,9 +64,7 @@ export function Hero() {
         <LiveCount />
       </Suspense>
 
-      <h1 className="mt-6 text-large text-text">
-        You said you&apos;d get customers. Now prove it, in public, for free.
-      </h1>
+      <h1 className="mt-6 text-large text-text">{HEADLINE}</h1>
 
       <p className="mt-5 max-w-2xl text-small text-text-muted">
         raceto10: connect Stripe, race to your first 10 customers.
