@@ -759,10 +759,15 @@ for (const [label, statusCode, expected] of [
 
     const event = recorded.find((r) => r.method === "recordEvent")?.args[0] as {
       type?: string;
-      customerCount?: number;
+      milestone?: number | null;
     };
     assert.equal(event?.type, "connection_lost");
-    assert.equal(event?.customerCount, 2, "the event did not carry the frozen count");
+    // No milestone — and deliberately not the frozen count, which this used to
+    // assert. `race_event.milestone_customer_count` is constrained to `NULL or
+    // 1..10`, so a race whose key died before its first customer would have
+    // written a 0 and failed the insert. The count is still frozen, which is
+    // the assertion below; it simply does not belong in a milestone column.
+    assert.equal(event?.milestone, null);
 
     // Frozen, not corrected. No count write at all is the assertion that
     // matters: writing the same value back would still be this job deciding it.

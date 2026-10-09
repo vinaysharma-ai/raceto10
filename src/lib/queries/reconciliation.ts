@@ -1,6 +1,6 @@
 import "server-only";
 
-import type { ActiveRacer, ReconcileStore } from "@/lib/race/reconcile.ts";
+import { LOST_CONNECTION_STATUS, type ActiveRacer, type ReconcileStore } from "@/lib/race/reconcile.ts";
 
 /**
  * The Supabase-backed reconciliation store.
@@ -282,7 +282,7 @@ export function reconciliationStore(): ReconcileStore {
       const { data, error } = await db
         .from("provider_connections")
         .update({
-          connection_status: "broken",
+          connection_status: LOST_CONNECTION_STATUS,
           error_code: errorCode,
           updated_at: new Date().toISOString(),
         })
@@ -338,7 +338,11 @@ export function reconciliationStore(): ReconcileStore {
       const { error } = await db.from("race_event").insert({
         racer_id: input.racerId,
         event_type: input.type,
-        milestone_customer_count: input.customerCount,
+        // A milestone, or null — never the customer count. The column is
+        // constrained to `NULL or 1..10`, and `milestoneOf` is what keeps this
+        // inside it. See the note on the interface for what went wrong when the
+        // raw count was written here.
+        milestone_customer_count: input.milestone,
         occurred_at: input.occurredAt.toISOString(),
       });
 

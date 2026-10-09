@@ -40,7 +40,7 @@ from reconciliation_runs order by started_at desc limit 10;
 `not_verified` (no passing eligibility snapshot) or `connection_not_ready`.
 
 `racing` and the count has not moved: check `count_reconciled_at` on the racer row. If it
-is old the connection is broken. A `broken` connection is never read again, so the count
+is old the connection is broken. An `invalid` connection is never read again, so the count
 stays frozen until the racer reconnects — deliberate, no retry storm.
 ## Freeze a racer (**WRITE**)
 

@@ -159,13 +159,61 @@ export type ReconcileStore = {
    */
   deleteCredential(racerId: string): Promise<void>;
 
+  /**
+   * Records one line of the timeline.
+   *
+   * `milestone` is a *milestone* number, not a customer count, and the
+   * difference is the whole reason this is not called `customerCount` any more.
+   * `race_event.milestone_customer_count` is constrained to `NULL or between 1
+   * and 10`, because nine customers is not a milestone — and neither is none.
+   * The count is a fact about the race; the milestone is which rung of the
+   * ladder the event happened on, and it does not exist below one.
+   *
+   * Passing the count straight through is what put a `0` into the column on the
+   * expired and connection-lost paths, and an `11` on any race that gained more
+   * than one customer between two polls. Both are `23514`s.
+   */
   recordEvent(input: {
     racerId: string;
     type: "customer_milestone" | "finished" | "expired" | "connection_lost";
-    customerCount: number;
+    milestone: number | null;
     occurredAt: Date;
   }): Promise<void>;
 };
+
+/**
+ * The milestone a count represents, or null when there is not one.
+ *
+ * Below one there is no milestone — a race that expired with nothing sold
+ * expired, and the timeline says so without a number. Above the target there is
+ * no further milestone either: the tenth customer is the last rung, and a race
+ * that gained four customers in one window reached ten, not fourteen. The feed
+ * reads this back as "reached N of 10", so a stored 14 would print "14 of 10".
+ *
+ * This is the only place the rule is written. Every caller that has a count
+ * goes through it, so the column cannot receive a value its CHECK rejects.
+ */
+export function milestoneOf(customerCount: number): number | null {
+  if (!Number.isFinite(customerCount) || customerCount < 1) return null;
+  return Math.min(Math.floor(customerCount), TARGET_CUSTOMERS);
+}
+
+/**
+ * What a lost key moves the connection to.
+ *
+ * Not "broken", which is what this used to write and is not a value
+ * `provider_connections.connection_status` allows — the column's CHECK accepts
+ * `pending, connected, invalid, revoked, unavailable`. So every write on this
+ * path failed a `23514`, the caller swallowed it with `.catch(() => false)`,
+ * and the connection stayed `connected` for a key Stripe had already refused:
+ * the poller kept reading a dead credential every thirty minutes forever, and
+ * the racer was never told to reconnect.
+ *
+ * `invalid` rather than `revoked` because nothing has been revoked — the key is
+ * still in the racer's dashboard, it simply no longer works. `revoked` is what
+ * disconnect writes, and that is a different fact.
+ */
+export const LOST_CONNECTION_STATUS = "invalid";
 
 // ---------------------------------------------------------------------------
 // One racer
@@ -261,7 +309,7 @@ export async function reconcileRacer(
       await store.recordEvent({
         racerId: racer.id,
         type: "customer_milestone",
-        customerCount,
+        milestone: milestoneOf(customerCount),
         occurredAt: now,
       });
     }
@@ -289,7 +337,7 @@ export async function reconcileRacer(
         await store.recordEvent({
           racerId: racer.id,
           type: "finished",
-          customerCount,
+          milestone: milestoneOf(customerCount),
           // Also the paid-at instant, so the timeline and the race end agree
           // rather than differing by however long the poll interval was.
           occurredAt: tenthPaidAt,
@@ -309,7 +357,7 @@ export async function reconcileRacer(
         await store.recordEvent({
           racerId: racer.id,
           type: "expired",
-          customerCount,
+          milestone: milestoneOf(customerCount),
           // The close of the window, not the moment we noticed it had closed.
           occurredAt: racer.endsAt,
         });
@@ -357,7 +405,10 @@ export async function reconcileRacer(
           .recordEvent({
             racerId: racer.id,
             type: "connection_lost",
-            customerCount: racer.currentCustomerCount,
+            // No milestone at all. This event says the key stopped working; how
+            // many customers the race had when it did is a fact about the race,
+            // not a rung of the ladder, and the feed reads no number for it.
+            milestone: null,
             occurredAt: now,
           })
           .catch(() => {
