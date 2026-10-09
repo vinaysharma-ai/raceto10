@@ -1,5 +1,10 @@
 import { z } from "zod";
 
+// Relative and with the extension, not the `@/` alias: this module is imported
+// by `node --test`, which type-strips rather than bundles and cannot resolve a
+// path alias. The `@/` form compiles and then fails at test time.
+import { fixtureMode, isFixtureKey } from "../verification/stripe/fixture-mode.ts";
+
 /**
  * Shape validation for a submitted Stripe key.
  *
@@ -34,6 +39,35 @@ const FULL_ACCESS_KEY = /^sk_(live|test)_[A-Za-z0-9]{16,}$/;
 
 export const STRIPE_KEY_MAX = 200;
 
+/**
+ * The two fixture keys, and only in the one situation they exist for.
+ *
+ * ## Why this is here at all
+ *
+ * `rk_test_fixture_empty` is not shaped like a Stripe key: its body is thirteen
+ * characters where the real ones are at least sixteen, and it contains an
+ * underscore where the real ones are alphanumeric only. So it fails the pattern
+ * above on two counts, which is the whole point of the pattern — and it is also
+ * the key the fixture walkthrough pastes in, which it could therefore never
+ * reach.
+ *
+ * ## Why it is exact equality behind a flag
+ *
+ * `isFixtureKey` compares against two literals. It is not a prefix match, there
+ * is no `fixture` pattern here, and no key of any other shape is let through —
+ * so the door this opens is two specific strings wide and nothing else.
+ *
+ * The second half of the `&&` is the guard, and both halves are evaluated at
+ * call time rather than at import time, so the flag is read when the form is
+ * submitted rather than when the module is first loaded. `fixtureMode()` is
+ * itself `NODE_ENV !== "production" && STRIPE_FIXTURE_MODE === "true"`. On
+ * Vercel `NODE_ENV` is always `production`, so these two strings cannot be
+ * accepted by a deployment however the environment is configured.
+ */
+function isAllowedFixtureKey(value: string): boolean {
+  return fixtureMode() && isFixtureKey(value);
+}
+
 export const stripeKeySchema = z.preprocess(
   (raw) => {
     const input = (raw ?? {}) as Record<string, unknown>;
@@ -51,7 +85,7 @@ export const stripeKeySchema = z.preprocess(
         "That is a full-access key. Create a restricted key with read-only permissions instead. RaceTo10 never needs to write to your account.",
       )
       .refine(
-        (value) => RESTRICTED_KEY.test(value),
+        (value) => RESTRICTED_KEY.test(value) || isAllowedFixtureKey(value),
         "That doesn't look like a restricted Stripe key. They start with rk_live_ or rk_test_.",
       ),
   }),
