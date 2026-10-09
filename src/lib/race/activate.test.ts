@@ -226,8 +226,20 @@ test("activation records the snapshot and the race event", async () => {
   assert.equal(snap.connectionId, CONNECTION_ID);
   assert.equal(snap.customerCount, 0);
 
+  // Deliberately not a count, and this assertion used to say `0`.
+  //
+  // `race_event.milestone_customer_count` is constrained to `null` or 1..10 —
+  // it holds a milestone number, and activation's baseline is zero, which is
+  // the absence of a milestone rather than milestone zero. Writing 0 here was
+  // a 23514 that the activation catch reported as `storage_error`, leaving the
+  // racer `racing` with a clock that had started and no event to show for it.
   const event = recorded.find((r) => r.method === "recordActivationEvent")?.args[0] as Record<string, unknown>;
-  assert.equal(event.customerCount, 0);
+  assert.equal("customerCount" in event, false);
+  assert.equal(
+    Object.values(event).some((value) => typeof value === "number"),
+    false,
+    `a number reached the event: ${JSON.stringify(event)}`,
+  );
 });
 
 test("the racer is moved into racing, in the same write as the clock", async () => {

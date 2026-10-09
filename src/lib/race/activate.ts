@@ -32,6 +32,32 @@ import { checkEligibility } from "../verification/eligibility.ts";
  * requests cannot both win.
  */
 
+/**
+ * A write that failed, carrying the database's own code.
+ *
+ * ## Why this exists
+ *
+ * A store method used to do `throw new Error(error.message)`, which discards
+ * the PostgREST code — and the code is the only part that says *what* went
+ * wrong. `23514` is a constraint, `42501` is a permission, `PGRST204` is
+ * PostgREST's schema cache not knowing a column. Without it a storage failure
+ * is a mystery that has to be reproduced to be diagnosed.
+ *
+ * `step` names the operation, so a log line can say where without the caller
+ * having to guess from a stack.
+ */
+export class ActivationStorageError extends Error {
+  readonly step: string;
+  readonly code: string | null;
+
+  constructor(step: string, code: string | null, message: string) {
+    super(message);
+    this.name = "ActivationStorageError";
+    this.step = step;
+    this.code = code;
+  }
+}
+
 /** Exit reasons, each with copy written for the person who hit it. */
 export type ActivationFailure =
   | "no_racer"
@@ -223,11 +249,24 @@ export type ActivationStore = {
     capturedAt: Date;
   }): Promise<void>;
 
-  recordActivationEvent(input: {
-    racerId: string;
-    occurredAt: Date;
-    customerCount: number;
-  }): Promise<void>;
+  /**
+   * Records that the clock started.
+   *
+   * ## Why there is no count here
+   *
+   * There used to be, and it was the bug. `race_event.milestone_customer_count`
+   * is constrained to `NULL or between 1 and 10` — it is a *milestone* number,
+   * which is why the column is named that. Activation's baseline is zero, and
+   * zero is not a milestone: it is the absence of one. Writing `0` failed
+   * `race_event_customer_number_range` with a `23514`, which surfaced as an
+   * unhelpful `storage_error` on a race whose clock had already started.
+   *
+   * Passing no count makes that unrepresentable rather than merely fixed: a
+   * caller cannot send a number that the column would reject. The feed agrees —
+   * `describeActivity` reads the count for `customer_milestone` and `expired`,
+   * and for `activated` it says "started a race" and ignores it.
+   */
+  recordActivationEvent(input: { racerId: string; occurredAt: Date }): Promise<void>;
 };
 
 // ---------------------------------------------------------------------------
@@ -256,7 +295,13 @@ export async function activateRacer(
   // would mean either an invisible racer or a reversed activation.
   if (!consent) return refuse("no_consent");
 
+  // Names the operation in flight, so a storage failure can say which one it
+  // was. Assigned before each step rather than derived from a stack afterwards,
+  // because the error has been re-wrapped by the time it arrives.
+  let step = "start";
+
   try {
+    step = "loadRacer";
     const racer = await store.loadRacer(racerId);
     if (!racer) return refuse("no_racer");
 
@@ -285,6 +330,7 @@ export async function activateRacer(
     }
 
     // --- The connection must be healthy -------------------------------------
+    step = "loadConnection";
     const connection = await store.loadConnection(racerId, provider.id);
     if (!connection) return refuse("no_connection");
     if (connection.status !== "connected") return refuse("connection_not_ready");
@@ -296,6 +342,7 @@ export async function activateRacer(
     // connection's history. A racer whose probe failed at registration has
     // never been told they qualify — letting them activate on the strength of
     // a fresh check alone would skip the step where they saw the verdict.
+    step = "registrationEligibility";
     const registrationVerdict = await store.latestRegistrationEligibility(racerId);
     if (registrationVerdict === null || registrationVerdict === "failed") {
       return refuse("not_verified");
@@ -309,6 +356,7 @@ export async function activateRacer(
     };
 
     // --- The duration, read now ---------------------------------------------
+    step = "raceDuration";
     const durationDays = await store.raceDurationDays();
     if (!durationDays || durationDays <= 0) return refuse("duration_unavailable");
 
@@ -324,6 +372,7 @@ export async function activateRacer(
     let baseline: ExternalCustomer[];
     let mrrMinor: number | null;
 
+    step = "providerRead";
     try {
       baseline = [];
       for await (const customer of provider.listCustomers(asProviderConnection, now)) {
@@ -376,6 +425,7 @@ export async function activateRacer(
     // No email is sent and none is owed: they were told at registration that a
     // change would stop the clock, and nothing has been published about them.
     if (!verdict.eligible) {
+      step = "markIneligible";
       await store.markIneligible(racerId);
 
       // Deleted after the status, and deliberately not before: if this throws,
@@ -384,6 +434,7 @@ export async function activateRacer(
       // order would delete a key for a racer who then stayed `ready` and could
       // still be activated with no credential — a race that starts and can never
       // be counted.
+      step = "deleteCredential";
       await store.deleteCredential(racerId);
 
       return refuse("not_eligible");
@@ -398,6 +449,7 @@ export async function activateRacer(
     // against a baseline that was never recorded.
     const raceEndAt = new Date(now.getTime() + durationDays * 24 * 60 * 60 * 1000);
 
+    step = "beginActivation";
     const begun = await store.beginActivation({
       racerId,
       activatedAt: now,
@@ -421,11 +473,13 @@ export async function activateRacer(
       };
     }
 
+    step = "writeBaselineCustomers";
     await store.writeBaselineCustomers(
       racerId,
       baseline.map((customer) => customer.externalId),
     );
 
+    step = "recordActivationSnapshot";
     await store.recordActivationSnapshot({
       racerId,
       connectionId: connection.id,
@@ -433,11 +487,8 @@ export async function activateRacer(
       capturedAt: now,
     });
 
-    await store.recordActivationEvent({
-      racerId,
-      occurredAt: now,
-      customerCount: baseline.length,
-    });
+    step = "recordActivationEvent";
+    await store.recordActivationEvent({ racerId, occurredAt: now });
 
     return {
       ok: true,
@@ -447,13 +498,55 @@ export async function activateRacer(
       baselineCustomerCount: baseline.length,
       durationDays,
     };
-  } catch {
-    // Category and racer only. This path can see a provider failure, and a
-    // provider's own message can quote the credential back — Stripe answers a
-    // bad key with `"Invalid API Key provided: rk_live_…"`.
-    console.error("[activation] failed", { racerId, code: "storage_error" });
+  } catch (error) {
+    logStorageError(racerId, step, error);
     return refuse("storage_error");
   }
+}
+
+/**
+ * The one line a storage failure leaves.
+ *
+ * ## What it says, and what it refuses to
+ *
+ * The step, always. Outside production it also carries the database's code and
+ * message, because diagnosing a write that failed without reproducing it needs
+ * the difference between a constraint, a permission and a stale schema cache —
+ * and those are three different fixes.
+ *
+ * In production the detail is dropped. A PostgREST message can quote the values
+ * in the failing row, and this path is one provider failure away from a message
+ * that contains a credential — Stripe answers a bad key with `"Invalid API Key
+ * provided: rk_live_…"`, which is exactly the string this codebase refuses to
+ * log anywhere else. The racer id is an internal uuid the owner already holds,
+ * and the step is ours, so both stay.
+ *
+ * The HTTP response is unchanged either way: a fixed reason, never this.
+ */
+function logStorageError(racerId: string, step: string, error: unknown): void {
+  const named = error instanceof ActivationStorageError ? error.step : step;
+
+  if (process.env.NODE_ENV === "production") {
+    console.error("[activate] storage_error", { racerId, step: named, code: "storage_error" });
+    return;
+  }
+
+  const detail = (error ?? {}) as {
+    code?: unknown;
+    message?: unknown;
+    details?: unknown;
+    hint?: unknown;
+  };
+
+  console.error("[activate] storage_error", {
+    racerId,
+    step: named,
+    code: "storage_error",
+    pgCode: (error instanceof ActivationStorageError ? error.code : null) ?? detail.code ?? null,
+    pgMessage: typeof detail.message === "string" ? detail.message : String(error),
+    ...(detail.details ? { pgDetails: detail.details } : {}),
+    ...(detail.hint ? { pgHint: detail.hint } : {}),
+  });
 }
 
 function refuse(reason: ActivationFailure): ActivationOutcome {

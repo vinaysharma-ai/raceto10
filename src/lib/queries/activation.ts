@@ -1,8 +1,20 @@
 import "server-only";
 
 import { getRaceDuration } from "@/lib/race/config";
-import type { ActivationStore, RacerState } from "@/lib/race/activate.ts";
+import { ActivationStorageError, type ActivationStore, type RacerState } from "@/lib/race/activate.ts";
 import { getCurrentRacerId } from "@/lib/queries/provider-connection";
+
+/**
+ * A failed write, with the database's code kept.
+ *
+ * `throw new Error(error.message)` was the shape here, and it threw away the
+ * only part that identifies the failure: PostgREST's `code`. A constraint
+ * violation, a missing grant and a stale schema cache all produce a sentence
+ * that reads like a sentence, and a `code` that distinguishes them.
+ */
+function fail(step: string, error: { code?: string | null; message: string }): never {
+  throw new ActivationStorageError(step, error.code ?? null, error.message);
+}
 
 /**
  * The Supabase-backed activation store.
@@ -30,7 +42,7 @@ export async function readyRacerIds(): Promise<string[]> {
     .eq("status", "ready")
     .order("created_at", { ascending: true });
 
-  if (error) throw new Error(error.message);
+  if (error) fail("readyRacerIds", error);
   return (data ?? []).map((row) => row.id);
 }
 
@@ -141,7 +153,7 @@ export function activationStore(racerId?: string): ActivationStore {
         .eq("id", racerId)
         .in("status", ["ready", "verification_failed"]);
 
-      if (error) throw new Error(error.message);
+      if (error) fail("markIneligible", error);
     },
 
     /**
@@ -168,7 +180,7 @@ export function activationStore(racerId?: string): ActivationStore {
         .eq("racer_id", racerId)
         .maybeSingle();
 
-      if (readError) throw new Error(readError.message);
+      if (readError) fail("deleteCredential.read", readError);
       if (!connection) return;
 
       const { error } = await db
@@ -176,7 +188,7 @@ export function activationStore(racerId?: string): ActivationStore {
         .delete()
         .eq("provider_connection_id", connection.id);
 
-      if (error) throw new Error(error.message);
+      if (error) fail("deleteCredential.delete", error);
     },
 
     /**
@@ -226,7 +238,7 @@ export function activationStore(racerId?: string): ActivationStore {
         .update({ email_sent_at: at.toISOString() })
         .eq("id", racerId);
 
-      if (error) throw new Error(error.message);
+      if (error) fail("markEmailSent", error);
     },
 
     raceDurationDays: getRaceDuration,
@@ -264,7 +276,7 @@ export function activationStore(racerId?: string): ActivationStore {
         .select("activated_at, race_end_at, baseline_customer_count")
         .maybeSingle();
 
-      if (error) throw new Error(error.message);
+      if (error) fail("beginActivation", error);
 
       if (data) return { won: true as const };
 
@@ -276,7 +288,10 @@ export function activationStore(racerId?: string): ActivationStore {
         .maybeSingle();
 
       if (readError || !existing?.activated_at || !existing.race_end_at) {
-        throw new Error(readError?.message ?? "activation state is unreadable");
+        fail(
+          "beginActivation.readExisting",
+          readError ?? { message: "activation state is unreadable" },
+        );
       }
 
       return {
@@ -307,7 +322,7 @@ export function activationStore(racerId?: string): ActivationStore {
         })),
       );
 
-      if (error) throw new Error(error.message);
+      if (error) fail("writeBaselineCustomers", error);
     },
 
     async recordActivationSnapshot(input) {
@@ -324,7 +339,7 @@ export function activationStore(racerId?: string): ActivationStore {
         captured_at: input.capturedAt.toISOString(),
       });
 
-      if (error) throw new Error(error.message);
+      if (error) fail("recordActivationSnapshot", error);
     },
 
     async recordActivationEvent(input) {
@@ -334,11 +349,17 @@ export function activationStore(racerId?: string): ActivationStore {
       const { error } = await db.from("race_event").insert({
         racer_id: input.racerId,
         event_type: "activated",
-        milestone_customer_count: input.customerCount,
+        // NULL, and it has to be. `race_event_customer_number_range` allows
+        // `null` or a value in 1..10, because the column holds a *milestone*
+        // number. An activation has none — the baseline is zero, which means
+        // "no customer yet" rather than "customer number zero". Writing 0 here
+        // was a 23514 that surfaced as `storage_error` on a race whose clock
+        // had already started.
+        milestone_customer_count: null,
         occurred_at: input.occurredAt.toISOString(),
       });
 
-      if (error) throw new Error(error.message);
+      if (error) fail("recordActivationEvent", error);
     },
   };
 }
