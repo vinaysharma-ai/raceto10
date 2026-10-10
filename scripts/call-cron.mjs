@@ -134,8 +134,30 @@ if (isLocal && path === ACTIVATE && !flags.has("--local")) {
 }
 
 // --- Send --------------------------------------------------------------------
+//
+// The method is per endpoint, and it has to be: `/api/cron/reconcile` exports
+// only GET — it is a scheduled read, and the GitHub workflow calls it that way —
+// while `/api/admin/activate-ready` exports only POST, because it changes state.
+//
+// This sent POST to both, so `npm run reconcile` answered 405 and the runbook
+// told the owner to run a command that could not work. Nothing caught it because
+// the script is not reachable from the test runner and the routes are only
+// reached over HTTP.
+const METHOD_BY_PATH = {
+  [ACTIVATE]: "POST",
+  "/api/cron/reconcile": "GET",
+};
+
+const method = METHOD_BY_PATH[path];
+if (!method) {
+  console.error(
+    `Unknown endpoint ${path}. Add it to METHOD_BY_PATH, matching the method the route exports.`,
+  );
+  process.exit(2);
+}
+
 const response = await fetch(target, {
-  method: "POST",
+  method,
   headers: { Authorization: `Bearer ${secret}` },
 });
 
