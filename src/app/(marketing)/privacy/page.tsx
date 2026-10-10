@@ -9,12 +9,27 @@ import { env } from "@/lib/env";
  *
  * ## Scope, and why it is this short
  *
- * It describes only what the product does today: a waitlist address, the profile
- * a sign-in fills in, what becomes public once a founder consents, and how to
- * ask for deletion. Nothing here is aspirational. A privacy page that describes
- * a key vault before the vault exists is the kind of copy this product cannot
- * afford, and it would be read as a promise. The paragraph about provider keys
- * is added when there is a vault to describe.
+ * It describes only what the product does today: what a visit counts, a waitlist
+ * address, the profile a sign-in fills in, what becomes public once a founder
+ * consents, and how to ask for deletion. Nothing here is aspirational. A privacy
+ * page that describes a key vault before the vault exists is the kind of copy
+ * this product cannot afford, and it would be read as a promise. The paragraph
+ * about provider keys is added when there is a vault to describe.
+ *
+ * ## The analytics paragraph
+ *
+ * Written from Vercel's own published list of what a data point stores, rather
+ * than from what this kind of script is usually assumed to collect. That matters
+ * because the half of the list a reader would not guess — the address of the
+ * page, the address they arrived from, a city resolved from the connection — is
+ * also the half that would make this page a lie if it went unmentioned, and
+ * because the reassuring half is unusually good here: no cookies, and a hash
+ * that is reset every day.
+ *
+ * The opening paragraph used to say there was no analytics on any page. That was
+ * true when it was written and stopped being true the moment `<Analytics />`
+ * went into the root layout, so it was the first thing corrected — this is the
+ * one page that cannot afford to be approximately right.
  *
  * ## Why the public row is listed twice
  *
@@ -40,10 +55,36 @@ export default function PrivacyPage() {
         <h1 className="text-medium">Privacy</h1>
         <p className="mt-3 max-w-2xl text-small text-text-muted prose">
           What this site collects, and what it does with it. There is no
-          analytics, no advertising and no tracking on any page.
+          advertising, and nothing here follows you from one site to another.
         </p>
 
         <div className="mt-10 flex max-w-2xl flex-col gap-10">
+          <section>
+            <h2 className="text-medium">Visiting</h2>
+            <p className="mt-3 text-small text-text-muted prose">
+              We count page views. This is the only thing the site does before
+              you do anything, and it counts everyone who arrives, including the
+              people who never sign up. It is how we can tell which pages get
+              read, and whether anyone is finding this at all.
+            </p>
+            <p className="mt-3 text-small text-text-muted prose">
+              The counting is done by Vercel, who host the site. It sets no
+              cookies, and it stores nothing that identifies you. To tell one
+              visitor from another it makes a hash from the request, and that
+              hash is discarded after a day — so a visit today cannot be joined
+              to a visit tomorrow, or to anything you do on any other site. It
+              is not tied to your IP address.
+            </p>
+            <p className="mt-3 text-small text-text-muted prose">
+              Each page view records the address of the page, the address of the
+              page you arrived from, the country and city the request appears to
+              come from, your browser and operating system, and whether you are
+              on a phone, a tablet or a computer. It is kept as totals, and
+              there is no list of what you in particular looked at, because
+              there is nothing left to attach one to.
+            </p>
+          </section>
+
           <section>
             <h2 className="text-medium">The waitlist</h2>
             <p className="mt-3 text-small text-text-muted prose">

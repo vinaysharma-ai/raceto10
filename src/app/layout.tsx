@@ -1,5 +1,6 @@
 import type { Metadata, Viewport } from "next";
 import { Space_Grotesk, JetBrains_Mono } from "next/font/google";
+import { Analytics } from "@vercel/analytics/next";
 
 import { env } from "@/lib/env";
 import { HEADLINE } from "@/lib/headline";
@@ -58,6 +59,11 @@ export default function RootLayout({ children }: LayoutProps<"/">) {
     >
       <body className="min-h-full flex flex-col bg-bg text-text font-sans">
         {children}
+        {/* Page views, once for the whole app. It is here rather than in a
+            page because the component has to be mounted on every route to
+            catch client-side navigations, and mounting it twice would
+            double-count. What it collects is described in `/privacy`. */}
+        <Analytics />
       </body>
     </html>
   );
