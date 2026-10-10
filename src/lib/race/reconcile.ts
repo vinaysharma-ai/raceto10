@@ -501,7 +501,45 @@ export type ReconcileSummary = {
   finished: string[];
   expired: string[];
   failures: Array<{ racerId: string; reason: ReconcileFailure }>;
+  /**
+   * Racers this run did not start because the time budget ran out.
+   *
+   * Reported rather than silent. `considered` no longer summing to
+   * `reconciled + failures.length` is the signal that a fleet has outgrown one
+   * invocation, and that is the number the owner needs before it becomes an
+   * outage rather than a statistic.
+   */
+  skipped: number;
 };
+
+/**
+ * How long this invocation may spend starting new racers.
+ *
+ * ## Why a budget at all
+ *
+ * `maxDuration` on the route is 300 seconds, and exceeding it does not fail
+ * politely — the platform kills the function mid-loop, the summary is lost, and
+ * any `reconciliation_runs` row opened for the racer in flight is left
+ * `running` forever. A stuck run row is not cosmetic: `beginRun` opens one per
+ * racer per pass, and nothing reaps them.
+ *
+ * The loop is sequential, so its cost is the sum of every racer's provider
+ * round trips. One slow account is enough to spend the whole allowance.
+ *
+ * ## Why 45 seconds
+ *
+ * The schedule is every thirty minutes. Stopping at a seventh of the limit
+ * leaves room to finish the racer already started — the check is before each
+ * racer, never mid-racer, because abandoning one halfway is how a count gets
+ * frozen with no explanation — and it leaves the remaining 255 seconds of
+ * headroom unused rather than spent. A fleet that cannot be swept in 45 seconds
+ * is a fleet that needs a second schedule entry, not a longer leash.
+ *
+ * Nothing is lost by stopping. The next run reads `activeRacers()` again and
+ * picks up everyone this one did not reach, and `race_customer`'s unique key
+ * makes re-reading a window free.
+ */
+export const RECONCILE_BUDGET_MS = 45_000;
 
 /**
  * Reconciles every active racer.
@@ -532,8 +570,13 @@ export async function reconcileActiveRacers(
    */
   providerFor: (racerId: string) => VerificationProvider,
   now: Date = new Date(),
+  options: { budgetMs?: number; clock?: () => number } = {},
 ): Promise<ReconcileSummary> {
   const racers = await store.activeRacers();
+
+  const budgetMs = options.budgetMs ?? RECONCILE_BUDGET_MS;
+  const clock = options.clock ?? Date.now;
+  const startedAt = clock();
 
   const summary: ReconcileSummary = {
     considered: racers.length,
@@ -542,9 +585,18 @@ export async function reconcileActiveRacers(
     finished: [],
     expired: [],
     failures: [],
+    skipped: 0,
   };
 
   for (const racer of racers) {
+    // Before each racer, never during one. A racer abandoned halfway through is
+    // a count that stopped moving for no reason anybody can see, and the run row
+    // `beginRun` opened would stay `running` with nothing to close it.
+    if (clock() - startedAt >= budgetMs) {
+      summary.skipped = racers.length - (summary.reconciled + summary.failures.length);
+      break;
+    }
+
     const outcome = await reconcileRacer(store, providerFor(racer.id), racer, now);
 
     if (!outcome.ok) {

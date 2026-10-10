@@ -75,6 +75,9 @@ export async function GET(request: NextRequest) {
       advanced: summary.advanced,
       finished: summary.finished.length,
       failures: summary.failures.length,
+      // Non-zero means this run hit its budget and left racers for the next
+      // one. Counts only, like everything else here.
+      skipped: summary.skipped,
     });
   } catch {
     // Category only. The error's text can be a provider's, and a provider's
